@@ -285,6 +285,51 @@ def test_update_task_allows_start_when_blocker_deleted(tmp_claude_dir, team_task
     assert updated.status == "in_progress"
 
 
+def test_add_blocked_by_syncs_blocks_on_target(tmp_claude_dir, team_tasks_dir):
+    t1 = create_task("test-team", "A", "d1", base_dir=tmp_claude_dir)
+    t2 = create_task("test-team", "B", "d2", base_dir=tmp_claude_dir)
+    update_task("test-team", t2.id, add_blocked_by=[t1.id], base_dir=tmp_claude_dir)
+    t1_after = get_task("test-team", t1.id, base_dir=tmp_claude_dir)
+    assert t2.id in t1_after.blocks
+
+
+def test_add_blocks_syncs_blocked_by_on_target(tmp_claude_dir, team_tasks_dir):
+    t1 = create_task("test-team", "A", "d1", base_dir=tmp_claude_dir)
+    t2 = create_task("test-team", "B", "d2", base_dir=tmp_claude_dir)
+    update_task("test-team", t1.id, add_blocks=[t2.id], base_dir=tmp_claude_dir)
+    t2_after = get_task("test-team", t2.id, base_dir=tmp_claude_dir)
+    assert t1.id in t2_after.blocked_by
+
+
+def test_bidirectional_sync_is_idempotent(tmp_claude_dir, team_tasks_dir):
+    t1 = create_task("test-team", "A", "d1", base_dir=tmp_claude_dir)
+    t2 = create_task("test-team", "B", "d2", base_dir=tmp_claude_dir)
+    update_task("test-team", t1.id, add_blocks=[t2.id], base_dir=tmp_claude_dir)
+    update_task("test-team", t1.id, add_blocks=[t2.id], base_dir=tmp_claude_dir)
+    t1_after = get_task("test-team", t1.id, base_dir=tmp_claude_dir)
+    t2_after = get_task("test-team", t2.id, base_dir=tmp_claude_dir)
+    assert t1_after.blocks == [t2.id]
+    assert t2_after.blocked_by == [t1.id]
+
+
+def test_completing_task_cleans_blocked_by_on_dependents(tmp_claude_dir, team_tasks_dir):
+    t1 = create_task("test-team", "A", "d1", base_dir=tmp_claude_dir)
+    t2 = create_task("test-team", "B", "d2", base_dir=tmp_claude_dir)
+    update_task("test-team", t2.id, add_blocked_by=[t1.id], base_dir=tmp_claude_dir)
+    update_task("test-team", t1.id, status="completed", base_dir=tmp_claude_dir)
+    t2_after = get_task("test-team", t2.id, base_dir=tmp_claude_dir)
+    assert t1.id not in t2_after.blocked_by
+
+
+def test_completing_task_preserves_blocks_on_self(tmp_claude_dir, team_tasks_dir):
+    t1 = create_task("test-team", "A", "d1", base_dir=tmp_claude_dir)
+    t2 = create_task("test-team", "B", "d2", base_dir=tmp_claude_dir)
+    update_task("test-team", t1.id, add_blocks=[t2.id], base_dir=tmp_claude_dir)
+    update_task("test-team", t1.id, status="completed", base_dir=tmp_claude_dir)
+    t1_after = get_task("test-team", t1.id, base_dir=tmp_claude_dir)
+    assert t2.id in t1_after.blocks
+
+
 def test_delete_task_cleans_up_stale_refs(tmp_claude_dir, team_tasks_dir):
     t1 = create_task("test-team", "A", "d1", base_dir=tmp_claude_dir)
     t2 = create_task("test-team", "B", "d2", base_dir=tmp_claude_dir)

@@ -30,6 +30,15 @@ def _tasks_dir(base_dir: Path | None = None) -> Path:
 _STATUS_ORDER = {"pending": 0, "in_progress": 1, "completed": 2}
 
 
+def _sync_dependency(team_dir: Path, target_id: str, field: str, value: str) -> None:
+    fpath = team_dir / f"{target_id}.json"
+    other = TaskFile(**json.loads(fpath.read_text()))
+    lst = getattr(other, field)
+    if value not in lst:
+        lst.append(value)
+        fpath.write_text(json.dumps(other.model_dump(by_alias=True, exclude_none=True)))
+
+
 def next_task_id(team_name: str, base_dir: Path | None = None) -> str:
     team_dir = _tasks_dir(base_dir) / team_name
     ids: list[int] = []
@@ -123,6 +132,7 @@ def update_task(
                 if b not in existing:
                     task.blocks.append(b)
                     existing.add(b)
+                _sync_dependency(team_dir, b, "blocked_by", task_id)
 
         if add_blocked_by:
             for b in add_blocked_by:
@@ -135,6 +145,7 @@ def update_task(
                 if b not in existing:
                     task.blocked_by.append(b)
                     existing.add(b)
+                _sync_dependency(team_dir, b, "blocks", task_id)
 
         if metadata is not None:
             current = task.metadata or {}
@@ -165,6 +176,21 @@ def update_task(
                                 f"blocked by task {blocker_id} (status: {blocker.status!r})"
                             )
             task.status = status
+
+            if status == "completed":
+                for f in team_dir.glob("*.json"):
+                    try:
+                        int(f.stem)
+                    except ValueError:
+                        continue
+                    if f.stem == task_id:
+                        continue
+                    other = TaskFile(**json.loads(f.read_text()))
+                    if task_id in other.blocked_by:
+                        other.blocked_by.remove(task_id)
+                        f.write_text(
+                            json.dumps(other.model_dump(by_alias=True, exclude_none=True))
+                        )
 
         if status == "deleted":
             task.status = "deleted"
