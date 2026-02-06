@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import unittest.mock
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from claude_teams.teams import (
     delete_team,
     read_config,
     remove_member,
+    write_config,
 )
 
 
@@ -110,6 +112,22 @@ class TestMembers:
         cfg = read_config("squad2", base_dir=tmp_claude_dir)
         assert len(cfg.members) == 1
         assert cfg.members[0].name == "team-lead"
+
+
+class TestWriteConfig:
+    def test_should_cleanup_temp_file_when_replace_fails(self, tmp_claude_dir: Path) -> None:
+        create_team("atomic", "sess-1", base_dir=tmp_claude_dir)
+        config = read_config("atomic", base_dir=tmp_claude_dir)
+        config.description = "updated"
+
+        config_dir = tmp_claude_dir / "teams" / "atomic"
+
+        with unittest.mock.patch("os.replace", side_effect=OSError("disk full")):
+            with pytest.raises(OSError, match="disk full"):
+                write_config("atomic", config, base_dir=tmp_claude_dir)
+
+        tmp_files = list(config_dir.glob("*.tmp"))
+        assert tmp_files == [], f"Leaked temp files: {tmp_files}"
 
 
 class TestReadConfig:

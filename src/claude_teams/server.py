@@ -1,8 +1,10 @@
+import asyncio
 import time
 import uuid
 from typing import Any, Literal
 
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.lifespan import lifespan
 
 from claude_teams import messaging, tasks, teams
@@ -49,7 +51,7 @@ def team_create(
     (letters, numbers, hyphens, underscores)."""
     ls = _get_lifespan(ctx)
     if ls.get("active_team"):
-        raise RuntimeError(f"Session already has active team: {ls['active_team']}. One team per session.")
+        raise ToolError(f"Session already has active team: {ls['active_team']}. One team per session.")
     result = teams.create_team(name=team_name, session_id=ls["session_id"], description=description)
     ls["active_team"] = team_name
     return result.model_dump()
@@ -103,12 +105,13 @@ def send_message(
     summary: str = "",
     request_id: str = "",
     approve: bool | None = None,
+    sender: str = "team-lead",
 ) -> dict:
     """Send a message to a teammate or respond to a protocol request.
     Type 'message' sends a direct message (requires recipient, summary).
     Type 'broadcast' sends to all teammates (requires summary).
     Type 'shutdown_request' asks a teammate to shut down (requires recipient; content used as reason).
-    Type 'shutdown_response' responds to a shutdown request (requires request_id, approve).
+    Type 'shutdown_response' responds to a shutdown request (requires sender, request_id, approve).
     Type 'plan_approval_response' responds to a plan approval request (requires recipient, request_id, approve)."""
 
     if type == "message":
@@ -161,26 +164,26 @@ def send_message(
             config = teams.read_config(team_name)
             member = None
             for m in config.members:
-                if isinstance(m, TeammateMember) and m.name == recipient:
+                if isinstance(m, TeammateMember) and m.name == sender:
                     member = m
                     break
             pane_id = member.tmux_pane_id if member else ""
             backend = member.backend_type if member else "tmux"
             payload = ShutdownApproved(
                 request_id=request_id,
-                from_=recipient,
+                from_=sender,
                 timestamp=messaging.now_iso(),
                 pane_id=pane_id,
                 backend_type=backend,
             )
-            messaging.send_structured_message(team_name, recipient, "team-lead", payload)
+            messaging.send_structured_message(team_name, sender, "team-lead", payload)
             return SendMessageResult(
                 success=True,
                 message=f"Shutdown approved for request {request_id}",
             ).model_dump(exclude_none=True)
         else:
             messaging.send_plain_message(
-                team_name, recipient, "team-lead",
+                team_name, sender, "team-lead",
                 content or "Shutdown rejected",
                 summary="shutdown_rejected",
             )
@@ -192,13 +195,13 @@ def send_message(
     elif type == "plan_approval_response":
         if approve:
             messaging.send_plain_message(
-                team_name, "team-lead", recipient,
+                team_name, sender, recipient,
                 '{"type":"plan_approval","approved":true}',
                 summary="plan_approved",
             )
         else:
             messaging.send_plain_message(
-                team_name, "team-lead", recipient,
+                team_name, sender, recipient,
                 content or "Plan rejected",
                 summary="plan_rejected",
             )
@@ -207,7 +210,7 @@ def send_message(
             message=f"Plan {'approved' if approve else 'rejected'} for {recipient}",
         ).model_dump(exclude_none=True)
 
-    raise ValueError(f"Unknown message type: {type}")
+    raise ToolError(f"Unknown message type: {type}")
 
 
 @mcp.tool
@@ -246,7 +249,7 @@ def task_update(
         active_form=active_form, add_blocks=add_blocks, add_blocked_by=add_blocked_by,
         metadata=metadata,
     )
-    if owner is not None and task.owner is not None:
+    if owner is not None and task.owner is not None and task.status != "deleted":
         messaging.send_task_assignment(team_name, task, assigned_by="team-lead")
     return task.model_dump(by_alias=True, exclude_none=True)
 
@@ -297,7 +300,7 @@ def force_kill_teammate(team_name: str, agent_name: str) -> dict:
             pane_id = m.tmux_pane_id
             break
     if pane_id is None:
-        raise ValueError(f"Teammate {agent_name!r} not found in team {team_name!r}")
+        raise ToolError(f"Teammate {agent_name!r} not found in team {team_name!r}")
     if pane_id:
         kill_tmux_pane(pane_id)
     teams.remove_member(team_name, agent_name)
@@ -306,7 +309,7 @@ def force_kill_teammate(team_name: str, agent_name: str) -> dict:
 
 
 @mcp.tool
-def poll_inbox(
+async def poll_inbox(
     team_name: str,
     agent_name: str,
     timeout_ms: int = 30000,
@@ -319,7 +322,7 @@ def poll_inbox(
         msgs = messaging.read_inbox(team_name, agent_name, unread_only=True, mark_as_read=True)
         if msgs:
             return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
     return []
 
 

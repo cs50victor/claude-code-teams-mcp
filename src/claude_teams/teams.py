@@ -97,9 +97,11 @@ def write_config(name: str, config: TeamConfig, base_dir: Path | None = None) ->
     try:
         os.write(fd, data.encode())
         os.close(fd)
+        fd = -1
         os.replace(tmp_path, config_dir / "config.json")
     except BaseException:
-        os.close(fd) if not os.get_inheritable(fd) else None
+        if fd >= 0:
+            os.close(fd)
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise
