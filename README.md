@@ -8,7 +8,7 @@ MCP server that implements Claude Code's [agent teams](https://code.claude.com/d
 
 
 
-https://github.com/user-attachments/assets/24038163-455d-4fd5-afac-4a3f904a7b4b
+https://github.com/user-attachments/assets/531ada0a-6c36-45cd-8144-a092bb9f9a19
 
 
 
