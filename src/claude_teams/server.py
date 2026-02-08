@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import time
@@ -48,13 +49,18 @@ def _build_spawn_description(
     if claude_binary:
         backends.append("'claude' (default, models: sonnet, opus, haiku)")
     if opencode_binary and opencode_server_url:
-        model_list = ", ".join(opencode_models) if opencode_models else "none discovered"
+        model_list = (
+            ", ".join(opencode_models) if opencode_models else "none discovered"
+        )
         backends.append(f"'opencode' (models: {model_list})")
     if backends:
         parts.append(f"Available backends: {'; '.join(backends)}.")
     if opencode_agents:
         agent_lines = [f"  - {a['name']}: {a['description']}" for a in opencode_agents]
-        parts.append("Available opencode agents (pass as subagent_type when backend_type='opencode'):\n" + "\n".join(agent_lines))
+        parts.append(
+            "Available opencode agents (pass as subagent_type when backend_type='opencode'):\n"
+            + "\n".join(agent_lines)
+        )
     return " ".join(parts)
 
 
@@ -76,10 +82,16 @@ async def app_lifespan(server):
         try:
             opencode_agents = opencode_client.list_agents(opencode_server_url)
         except opencode_client.OpenCodeAPIError:
-            logger.warning("Failed to fetch opencode agents from %s", opencode_server_url)
+            logger.warning(
+                "Failed to fetch opencode agents from %s", opencode_server_url
+            )
     tool = await mcp.get_tool("spawn_teammate")
     tool.description = _build_spawn_description(
-        claude_binary, opencode_binary, opencode_models, opencode_server_url, opencode_agents,
+        claude_binary,
+        opencode_binary,
+        opencode_models,
+        opencode_server_url,
+        opencode_agents,
     )
     session_id = str(uuid.uuid4())
     yield {
@@ -117,8 +129,12 @@ def team_create(
     (letters, numbers, hyphens, underscores)."""
     ls = _get_lifespan(ctx)
     if ls.get("active_team"):
-        raise ToolError(f"Session already has active team: {ls['active_team']}. One team per session.")
-    result = teams.create_team(name=team_name, session_id=ls["session_id"], description=description)
+        raise ToolError(
+            f"Session already has active team: {ls['active_team']}. One team per session."
+        )
+    result = teams.create_team(
+        name=team_name, session_id=ls["session_id"], description=description
+    )
     ls["active_team"] = team_name
     return result.model_dump()
 
@@ -177,14 +193,22 @@ def spawn_teammate_tool(
     ).model_dump()
 
 
-def _push_to_opencode_session(server_url: str, member: TeammateMember, text: str) -> None:
+def _push_to_opencode_session(
+    server_url: str, member: TeammateMember, text: str
+) -> None:
     """Push a message into an opencode teammate's session via the HTTP API."""
-    if member.backend_type != "opencode" or not member.opencode_session_id or not server_url:
+    if (
+        member.backend_type != "opencode"
+        or not member.opencode_session_id
+        or not server_url
+    ):
         return
     try:
         opencode_client.send_prompt_async(server_url, member.opencode_session_id, text)
     except OpenCodeAPIError:
-        logger.warning("Failed to push message to opencode session %s", member.opencode_session_id)
+        logger.warning(
+            "Failed to push message to opencode session %s", member.opencode_session_id
+        )
 
 
 def _cleanup_opencode_session(server_url: str | None, session_id: str | None) -> None:
@@ -212,7 +236,13 @@ def _find_teammate(team_name: str, name: str) -> TeammateMember | None:
 @mcp.tool
 def send_message(
     team_name: str,
-    type: Literal["message", "broadcast", "shutdown_request", "shutdown_response", "plan_approval_response"],
+    type: Literal[
+        "message",
+        "broadcast",
+        "shutdown_request",
+        "shutdown_response",
+        "plan_approval_response",
+    ],
     ctx: Context,
     recipient: str = "",
     content: str = "",
@@ -238,8 +268,14 @@ def send_message(
             raise ToolError("Message recipient must not be empty")
         config = teams.read_config(team_name)
         member_names = {m.name for m in config.members}
+        if sender not in member_names:
+            raise ToolError(f"Sender {sender!r} is not a member of team {team_name!r}")
         if recipient not in member_names:
-            raise ToolError(f"Recipient {recipient!r} is not a member of team {team_name!r}")
+            raise ToolError(
+                f"Recipient {recipient!r} is not a member of team {team_name!r}"
+            )
+        if sender != "team-lead" and recipient != "team-lead":
+            raise ToolError("Teammates can only send direct messages to team-lead")
         target_color = None
         target_member = None
         for m in config.members:
@@ -248,7 +284,12 @@ def send_message(
                 target_member = m
                 break
         messaging.send_plain_message(
-            team_name, "team-lead", recipient, content, summary=summary, color=target_color,
+            team_name,
+            sender,
+            recipient,
+            content,
+            summary=summary,
+            color=target_color,
         )
         if target_member and oc_url:
             _push_to_opencode_session(oc_url, target_member, content)
@@ -256,7 +297,7 @@ def send_message(
             success=True,
             message=f"Message sent to {recipient}",
             routing={
-                "sender": "team-lead",
+                "sender": sender,
                 "target": recipient,
                 "targetColor": target_color,
                 "summary": summary,
@@ -265,6 +306,8 @@ def send_message(
         ).model_dump(exclude_none=True)
 
     elif type == "broadcast":
+        if sender != "team-lead":
+            raise ToolError("Only team-lead can send broadcasts")
         if not summary:
             raise ToolError("Broadcast summary must not be empty")
         config = teams.read_config(team_name)
@@ -272,7 +315,12 @@ def send_message(
         for m in config.members:
             if isinstance(m, TeammateMember):
                 messaging.send_plain_message(
-                    team_name, "team-lead", m.name, content, summary=summary, color=None,
+                    team_name,
+                    "team-lead",
+                    m.name,
+                    content,
+                    summary=summary,
+                    color=None,
                 )
                 if oc_url:
                     _push_to_opencode_session(oc_url, m, content)
@@ -290,13 +338,19 @@ def send_message(
         config = teams.read_config(team_name)
         member_names = {m.name for m in config.members}
         if recipient not in member_names:
-            raise ToolError(f"Recipient {recipient!r} is not a member of team {team_name!r}")
+            raise ToolError(
+                f"Recipient {recipient!r} is not a member of team {team_name!r}"
+            )
         req_id = messaging.send_shutdown_request(team_name, recipient, reason=content)
         target_member = _find_teammate(team_name, recipient)
         if target_member and oc_url:
+            shutdown_request_payload = json.dumps(
+                {"type": "shutdown_request", "requestId": req_id, "reason": content}
+            )
             _push_to_opencode_session(
-                oc_url, target_member,
-                f'{{"type":"shutdown_request","requestId":"{req_id}","reason":"{content}"}}',
+                oc_url,
+                target_member,
+                shutdown_request_payload,
             )
         return SendMessageResult(
             success=True,
@@ -306,16 +360,21 @@ def send_message(
         ).model_dump(exclude_none=True)
 
     elif type == "shutdown_response":
+        config = teams.read_config(team_name)
+        member = None
+        for m in config.members:
+            if isinstance(m, TeammateMember) and m.name == sender:
+                member = m
+                break
+        if member is None:
+            raise ToolError(
+                f"Sender {sender!r} is not a teammate in team {team_name!r}"
+            )
+
         if approve:
-            config = teams.read_config(team_name)
-            member = None
-            for m in config.members:
-                if isinstance(m, TeammateMember) and m.name == sender:
-                    member = m
-                    break
-            pane_id = member.tmux_pane_id if member else ""
-            backend = member.backend_type if member else "claude"
-            oc_session = member.opencode_session_id if member else None
+            pane_id = member.tmux_pane_id
+            backend = member.backend_type
+            oc_session = member.opencode_session_id
             payload = ShutdownApproved(
                 request_id=request_id,
                 from_=sender,
@@ -331,7 +390,9 @@ def send_message(
             ).model_dump(exclude_none=True)
         else:
             messaging.send_plain_message(
-                team_name, sender, "team-lead",
+                team_name,
+                sender,
+                "team-lead",
                 content or "Shutdown rejected",
                 summary="shutdown_rejected",
             )
@@ -346,16 +407,22 @@ def send_message(
         config = teams.read_config(team_name)
         member_names = {m.name for m in config.members}
         if recipient not in member_names:
-            raise ToolError(f"Recipient {recipient!r} is not a member of team {team_name!r}")
+            raise ToolError(
+                f"Recipient {recipient!r} is not a member of team {team_name!r}"
+            )
         if approve:
             messaging.send_plain_message(
-                team_name, sender, recipient,
+                team_name,
+                sender,
+                recipient,
                 '{"type":"plan_approval","approved":true}',
                 summary="plan_approved",
             )
         else:
             messaging.send_plain_message(
-                team_name, sender, recipient,
+                team_name,
+                sender,
+                recipient,
                 content or "Plan rejected",
                 summary="plan_rejected",
             )
@@ -402,9 +469,15 @@ def task_update(
     Metadata keys are merged into existing metadata (set a key to null to delete it)."""
     try:
         task = tasks.update_task(
-            team_name, task_id,
-            status=status, owner=owner, subject=subject, description=description,
-            active_form=active_form, add_blocks=add_blocks, add_blocked_by=add_blocked_by,
+            team_name,
+            task_id,
+            status=status,
+            owner=owner,
+            subject=subject,
+            description=description,
+            active_form=active_form,
+            add_blocks=add_blocks,
+            add_blocked_by=add_blocked_by,
             metadata=metadata,
         )
     except FileNotFoundError:
@@ -445,7 +518,9 @@ def read_inbox(
 ) -> list[dict]:
     """Read messages from an agent's inbox. Returns all messages by default.
     Set unread_only=True to get only unprocessed messages."""
-    msgs = messaging.read_inbox(team_name, agent_name, unread_only=unread_only, mark_as_read=mark_as_read)
+    msgs = messaging.read_inbox(
+        team_name, agent_name, unread_only=unread_only, mark_as_read=mark_as_read
+    )
     return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
 
 
@@ -491,13 +566,17 @@ async def poll_inbox(
     """Poll an agent's inbox for new unread messages, waiting up to timeout_ms.
     Returns unread messages and marks them as read. Convenience tool for MCP
     clients that cannot watch the filesystem."""
-    msgs = messaging.read_inbox(team_name, agent_name, unread_only=True, mark_as_read=True)
+    msgs = messaging.read_inbox(
+        team_name, agent_name, unread_only=True, mark_as_read=True
+    )
     if msgs:
         return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
     deadline = time.time() + timeout_ms / 1000.0
     while time.time() < deadline:
         await asyncio.sleep(0.5)
-        msgs = messaging.read_inbox(team_name, agent_name, unread_only=True, mark_as_read=True)
+        msgs = messaging.read_inbox(
+            team_name, agent_name, unread_only=True, mark_as_read=True
+        )
         if msgs:
             return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
     return []

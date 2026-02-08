@@ -92,19 +92,27 @@ class TestBuildSpawnCommand:
 class TestSpawnTeammateNameValidation:
     def test_should_reject_empty_name(self, team_dir: Path) -> None:
         with pytest.raises(ValueError, match="Invalid"):
-            spawn_teammate(TEAM, "", "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir)
+            spawn_teammate(
+                TEAM, "", "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir
+            )
 
     def test_should_reject_name_with_special_chars(self, team_dir: Path) -> None:
         with pytest.raises(ValueError, match="Invalid"):
-            spawn_teammate(TEAM, "agent!@#", "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir)
+            spawn_teammate(
+                TEAM, "agent!@#", "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir
+            )
 
     def test_should_reject_name_exceeding_64_chars(self, team_dir: Path) -> None:
         with pytest.raises(ValueError, match="too long"):
-            spawn_teammate(TEAM, "a" * 65, "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir)
+            spawn_teammate(
+                TEAM, "a" * 65, "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir
+            )
 
     def test_should_reject_reserved_name_team_lead(self, team_dir: Path) -> None:
         with pytest.raises(ValueError, match="reserved"):
-            spawn_teammate(TEAM, "team-lead", "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir)
+            spawn_teammate(
+                TEAM, "team-lead", "prompt", "/bin/echo", SESSION_ID, base_dir=team_dir
+            )
 
 
 class TestSpawnTeammate:
@@ -144,9 +152,7 @@ class TestSpawnTeammate:
         assert msgs[0].text == "Do research"
 
     @patch("claude_teams.spawner.subprocess")
-    def test_updates_pane_id(
-        self, mock_subprocess: MagicMock, team_dir: Path
-    ) -> None:
+    def test_updates_pane_id(self, mock_subprocess: MagicMock, team_dir: Path) -> None:
         mock_subprocess.run.return_value.stdout = "%42\n"
         member = spawn_teammate(
             TEAM,
@@ -161,6 +167,27 @@ class TestSpawnTeammate:
         found = [m for m in config.members if m.name == "researcher"]
         assert found[0].tmux_pane_id == "%42"
 
+    @patch("claude_teams.spawner.subprocess.run")
+    def test_should_rollback_member_when_tmux_spawn_fails(
+        self, mock_run: MagicMock, team_dir: Path
+    ) -> None:
+        import subprocess as sp
+
+        mock_run.side_effect = sp.CalledProcessError(1, ["tmux", "split-window"])
+        with pytest.raises(sp.CalledProcessError):
+            spawn_teammate(
+                TEAM,
+                "broken-worker",
+                "Do research",
+                "/usr/local/bin/claude",
+                SESSION_ID,
+                base_dir=team_dir,
+            )
+
+        config = teams.read_config(TEAM, base_dir=team_dir)
+        names = [m.name for m in config.members]
+        assert "broken-worker" not in names
+
 
 class TestKillTmuxPane:
     @patch("claude_teams.spawner.subprocess")
@@ -169,7 +196,6 @@ class TestKillTmuxPane:
         mock_subprocess.run.assert_called_once_with(
             ["tmux", "kill-pane", "-t", "%99"], check=False
         )
-
 
 
 class TestBuildOpencodeAttachCommand:
@@ -197,15 +223,28 @@ class TestSpawnTeammateBackendType:
     def test_should_reject_opencode_when_binary_missing(self, team_dir: Path) -> None:
         with pytest.raises(ValueError, match="opencode"):
             spawn_teammate(
-                TEAM, "worker", "prompt", "/bin/echo", SESSION_ID,
-                base_dir=team_dir, backend_type="opencode", opencode_binary=None,
+                TEAM,
+                "worker",
+                "prompt",
+                "/bin/echo",
+                SESSION_ID,
+                base_dir=team_dir,
+                backend_type="opencode",
+                opencode_binary=None,
             )
 
-    def test_should_reject_opencode_when_server_url_missing(self, team_dir: Path) -> None:
+    def test_should_reject_opencode_when_server_url_missing(
+        self, team_dir: Path
+    ) -> None:
         with pytest.raises(ValueError, match="OPENCODE_SERVER_URL"):
             spawn_teammate(
-                TEAM, "worker", "prompt", "/bin/echo", SESSION_ID,
-                base_dir=team_dir, backend_type="opencode",
+                TEAM,
+                "worker",
+                "prompt",
+                "/bin/echo",
+                SESSION_ID,
+                base_dir=team_dir,
+                backend_type="opencode",
                 opencode_binary="/usr/local/bin/opencode",
                 opencode_server_url=None,
             )
@@ -216,8 +255,13 @@ class TestSpawnTeammateBackendType:
     ) -> None:
         mock_subprocess.run.return_value.stdout = "%42\n"
         member = spawn_teammate(
-            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="claude",
+            TEAM,
+            "worker",
+            "Do stuff",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="claude",
         )
         assert member.backend_type == "claude"
         call_args = mock_subprocess.run.call_args[0][0]
@@ -233,8 +277,13 @@ class TestSpawnTeammateBackendType:
         mock_oc.create_session.return_value = "ses_test123"
         mock_subprocess.run.return_value.stdout = "%42\n"
         member = spawn_teammate(
-            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
+            TEAM,
+            "worker",
+            "Do stuff",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
         )
@@ -255,8 +304,13 @@ class TestSpawnTeammateBackendType:
         mock_oc.create_session.return_value = "ses_1"
         mock_subprocess.run.return_value.stdout = "%42\n"
         spawn_teammate(
-            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
+            TEAM,
+            "worker",
+            "Do stuff",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
         )
@@ -270,8 +324,13 @@ class TestSpawnTeammateBackendType:
         mock_oc.create_session.return_value = "ses_1"
         mock_subprocess.run.return_value.stdout = "%42\n"
         spawn_teammate(
-            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
+            TEAM,
+            "worker",
+            "Do stuff",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
         )
@@ -287,8 +346,13 @@ class TestSpawnTeammateBackendType:
         mock_oc.create_session.return_value = "ses_1"
         mock_subprocess.run.return_value.stdout = "%42\n"
         spawn_teammate(
-            TEAM, "explorer", "Explore code", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
+            TEAM,
+            "explorer",
+            "Explore code",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
             opencode_agent="explore",
@@ -304,8 +368,13 @@ class TestSpawnTeammateBackendType:
         mock_oc.create_session.return_value = "ses_1"
         mock_subprocess.run.return_value.stdout = "%42\n"
         spawn_teammate(
-            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
+            TEAM,
+            "worker",
+            "Do stuff",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
         )
@@ -320,22 +389,69 @@ class TestSpawnTeammateBackendType:
         mock_oc.create_session.return_value = "ses_persisted"
         mock_subprocess.run.return_value.stdout = "%42\n"
         spawn_teammate(
-            TEAM, "oc-worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
+            TEAM,
+            "oc-worker",
+            "Do stuff",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
         )
         config = teams.read_config(TEAM, base_dir=team_dir)
-        found = [m for m in config.members if isinstance(m, TeammateMember) and m.name == "oc-worker"]
+        found = [
+            m
+            for m in config.members
+            if isinstance(m, TeammateMember) and m.name == "oc-worker"
+        ]
         assert len(found) == 1
         assert found[0].backend_type == "opencode"
         assert found[0].opencode_session_id == "ses_persisted"
 
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess.run")
+    def test_should_cleanup_opencode_session_when_tmux_spawn_fails(
+        self, mock_run: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        import subprocess as sp
+
+        mock_oc.create_session.return_value = "ses_fail"
+        mock_run.side_effect = sp.CalledProcessError(1, ["tmux", "split-window"])
+
+        with pytest.raises(sp.CalledProcessError):
+            spawn_teammate(
+                TEAM,
+                "oc-broken",
+                "Do stuff",
+                "/usr/local/bin/claude",
+                SESSION_ID,
+                base_dir=team_dir,
+                backend_type="opencode",
+                opencode_binary="/usr/local/bin/opencode",
+                opencode_server_url="http://localhost:4096",
+            )
+
+        mock_oc.abort_session.assert_called_once_with(
+            "http://localhost:4096", "ses_fail"
+        )
+        mock_oc.delete_session.assert_called_once_with(
+            "http://localhost:4096", "ses_fail"
+        )
+        config = teams.read_config(TEAM, base_dir=team_dir)
+        names = [m.name for m in config.members]
+        assert "oc-broken" not in names
+
     def test_should_reject_claude_when_binary_missing(self, team_dir: Path) -> None:
         with pytest.raises(ValueError, match="claude"):
             spawn_teammate(
-                TEAM, "worker", "prompt", None, SESSION_ID,
-                base_dir=team_dir, backend_type="claude",
+                TEAM,
+                "worker",
+                "prompt",
+                None,
+                SESSION_ID,
+                base_dir=team_dir,
+                backend_type="claude",
             )
 
     @patch("claude_teams.spawner.subprocess")
@@ -345,8 +461,13 @@ class TestSpawnTeammateBackendType:
         mock_subprocess.run.return_value.stdout = "%42\n"
         raw_prompt = "Analyze the codebase"
         spawn_teammate(
-            TEAM, "oc-reader", raw_prompt, "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="claude",
+            TEAM,
+            "oc-reader",
+            raw_prompt,
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="claude",
         )
         msgs = messaging.read_inbox(TEAM, "oc-reader", base_dir=team_dir)
         assert len(msgs) == 1
@@ -361,7 +482,9 @@ class TestDiscoverHarnessBinary:
         mock_which.assert_called_once_with("claude")
 
     @patch("claude_teams.spawner.shutil.which")
-    def test_should_return_none_when_claude_not_found(self, mock_which: MagicMock) -> None:
+    def test_should_return_none_when_claude_not_found(
+        self, mock_which: MagicMock
+    ) -> None:
         mock_which.return_value = None
         assert discover_harness_binary("claude") is None
 
@@ -372,7 +495,9 @@ class TestDiscoverHarnessBinary:
         mock_which.assert_called_once_with("opencode")
 
     @patch("claude_teams.spawner.shutil.which")
-    def test_should_return_none_when_opencode_not_found(self, mock_which: MagicMock) -> None:
+    def test_should_return_none_when_opencode_not_found(
+        self, mock_which: MagicMock
+    ) -> None:
         mock_which.return_value = None
         assert discover_harness_binary("opencode") is None
 
@@ -401,6 +526,7 @@ class TestDiscoverOpencodeModels:
     @patch("claude_teams.spawner.subprocess.run")
     def test_should_return_empty_on_timeout(self, mock_run: MagicMock) -> None:
         import subprocess as sp
+
         mock_run.side_effect = sp.TimeoutExpired(cmd="opencode", timeout=30)
         assert discover_opencode_models("/usr/local/bin/opencode") == []
 
@@ -410,4 +536,6 @@ class TestDiscoverOpencodeModels:
             returncode=0,
             stdout="Models cache refreshed\n\nanthropic/claude-opus-4-6\n\n",
         )
-        assert discover_opencode_models("/bin/opencode") == ["anthropic/claude-opus-4-6"]
+        assert discover_opencode_models("/bin/opencode") == [
+            "anthropic/claude-opus-4-6"
+        ]

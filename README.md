@@ -31,7 +31,7 @@ Add to your project's `.mcp.json` (Claude Code):
 }
 ```
 
-Or add to `~/.config/opencode/opencode.json` (OpenCode):
+Or add to `~/.config/opencode/config.json` (OpenCode):
 
 ```json
 {
@@ -49,7 +49,10 @@ Or add to `~/.config/opencode/opencode.json` (OpenCode):
 
 - Python 3.12+
 - [tmux](https://github.com/tmux/tmux)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI on PATH
+- At least one coding agent CLI on PATH:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
+  - [OpenCode](https://opencode.ai) (`opencode`)
+- For OpenCode teammates: `OPENCODE_SERVER_URL` must be set (for example, `http://localhost:4096`)
 
 ## Tools
 
@@ -57,7 +60,7 @@ Or add to `~/.config/opencode/opencode.json` (OpenCode):
 |------|-------------|
 | `team_create` | Create a new agent team. One team per server session. |
 | `team_delete` | Delete a team and all its data. Fails if teammates are still active. |
-| `spawn_teammate` | Spawn a Claude Code teammate in a tmux pane. |
+| `spawn_teammate` | Spawn a teammate in a tmux pane (Claude or OpenCode backend). |
 | `send_message` | Send direct messages, broadcasts, shutdown/plan approval responses. |
 | `read_inbox` | Read messages from an agent's inbox. |
 | `poll_inbox` | Long-poll an inbox for new messages (up to 30s). |
@@ -71,7 +74,7 @@ Or add to `~/.config/opencode/opencode.json` (OpenCode):
 
 ## How it works
 
-- **Spawning**: Teammates launch as separate Claude Code processes in tmux panes via `tmux split-window`. Each gets a unique agent ID (`name@team`) and color.
+- **Spawning**: Teammates launch in tmux panes via `tmux split-window`. Backend can be Claude (`claude`) or OpenCode (`opencode`). Each gets a unique agent ID (`name@team`) and color.
 - **Messaging**: JSON-based inboxes under `~/.claude/teams/<team>/inboxes/`. File locking (`fcntl`) prevents corruption from concurrent reads/writes.
 - **Tasks**: JSON task files under `~/.claude/tasks/<team>/`. Tasks have status tracking, ownership, and dependency management (`blocks`/`blockedBy`).
 - **Concurrency safety**: Atomic writes via `tempfile` + `os.replace` for config. `fcntl` file locks for inbox operations.

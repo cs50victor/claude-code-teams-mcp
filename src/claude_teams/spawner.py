@@ -29,7 +29,6 @@ Start by reading your inbox for instructions.
 {prompt}"""
 
 
-
 def discover_harness_binary(name: str) -> str | None:
     return shutil.which(name)
 
@@ -113,7 +112,9 @@ def spawn_teammate(
     opencode_agent: str | None = None,
 ) -> TeammateMember:
     if not _VALID_NAME_RE.match(name):
-        raise ValueError(f"Invalid agent name: {name!r}. Use only letters, numbers, hyphens, underscores.")
+        raise ValueError(
+            f"Invalid agent name: {name!r}. Use only letters, numbers, hyphens, underscores."
+        )
     if len(name) > 64:
         raise ValueError(f"Agent name too long ({len(name)} chars, max 64)")
     if name == "team-lead":
@@ -164,47 +165,71 @@ def spawn_teammate(
         is_active=False,
     )
 
-    teams.add_member(team_name, member, base_dir)
+    member_added = False
+    try:
+        teams.add_member(team_name, member, base_dir)
+        member_added = True
 
-    messaging.ensure_inbox(team_name, name, base_dir)
-    initial_msg = InboxMessage(
-        from_="team-lead",
-        text=prompt,
-        timestamp=messaging.now_iso(),
-        read=False,
-    )
-    messaging.append_message(team_name, name, initial_msg, base_dir)
-
-    if backend_type == "opencode":
-        wrapped = _OPENCODE_PROMPT_WRAPPER.format(
-            name=name, team_name=team_name, prompt=prompt,
+        messaging.ensure_inbox(team_name, name, base_dir)
+        initial_msg = InboxMessage(
+            from_="team-lead",
+            text=prompt,
+            timestamp=messaging.now_iso(),
+            read=False,
         )
-        opencode_client.send_prompt_async(
-            opencode_server_url,
-            opencode_session_id,
-            wrapped,
-            agent=opencode_agent or "build",
-        )
-        cmd = build_opencode_attach_command(
-            opencode_binary, opencode_server_url, opencode_session_id, resolved_cwd,
-        )
-    else:
-        cmd = build_spawn_command(member, claude_binary, lead_session_id)
+        messaging.append_message(team_name, name, initial_msg, base_dir)
 
-    result = subprocess.run(
-        ["tmux", "split-window", "-dP", "-F", "#{pane_id}", cmd],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    pane_id = result.stdout.strip()
+        if backend_type == "opencode":
+            wrapped = _OPENCODE_PROMPT_WRAPPER.format(
+                name=name,
+                team_name=team_name,
+                prompt=prompt,
+            )
+            opencode_client.send_prompt_async(
+                opencode_server_url,
+                opencode_session_id,
+                wrapped,
+                agent=opencode_agent or "build",
+            )
+            cmd = build_opencode_attach_command(
+                opencode_binary,
+                opencode_server_url,
+                opencode_session_id,
+                resolved_cwd,
+            )
+        else:
+            cmd = build_spawn_command(member, claude_binary, lead_session_id)
 
-    config = teams.read_config(team_name, base_dir)
-    for m in config.members:
-        if isinstance(m, TeammateMember) and m.name == name:
-            m.tmux_pane_id = pane_id
-            break
-    teams.write_config(team_name, config, base_dir)
+        result = subprocess.run(
+            ["tmux", "split-window", "-dP", "-F", "#{pane_id}", cmd],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        pane_id = result.stdout.strip()
+
+        config = teams.read_config(team_name, base_dir)
+        for m in config.members:
+            if isinstance(m, TeammateMember) and m.name == name:
+                m.tmux_pane_id = pane_id
+                break
+        teams.write_config(team_name, config, base_dir)
+    except Exception:
+        if member_added:
+            try:
+                teams.remove_member(team_name, name, base_dir)
+            except Exception:
+                pass
+        if backend_type == "opencode" and opencode_server_url and opencode_session_id:
+            try:
+                opencode_client.abort_session(opencode_server_url, opencode_session_id)
+            except Exception:
+                pass
+            try:
+                opencode_client.delete_session(opencode_server_url, opencode_session_id)
+            except Exception:
+                pass
+        raise
 
     member.tmux_pane_id = pane_id
     return member
