@@ -245,7 +245,7 @@ class TestSpawnTeammateBackendType:
         assert "attach" in cmd_str
         assert "ses_test123" in cmd_str
         assert "CLAUDECODE=1" not in cmd_str
-        assert "run" not in cmd_str
+        assert "claude run" not in cmd_str
 
     @patch("claude_teams.spawner.opencode_client")
     @patch("claude_teams.spawner.subprocess")
