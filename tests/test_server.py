@@ -9,10 +9,12 @@ from fastmcp import Client
 
 from claude_teams import messaging, tasks, teams
 from claude_teams.models import TeammateMember
-from claude_teams.server import mcp
+from claude_teams.server import _build_spawn_description, mcp
 
 
-def _make_teammate(name: str, team_name: str, pane_id: str = "%1") -> TeammateMember:
+def _make_teammate(
+    name: str, team_name: str, pane_id: str = "%1", backend_type: str = "claude",
+) -> TeammateMember:
     return TeammateMember(
         agent_id=f"{name}@{team_name}",
         name=name,
@@ -24,6 +26,7 @@ def _make_teammate(name: str, team_name: str, pane_id: str = "%1") -> TeammateMe
         joined_at=int(time.time() * 1000),
         tmux_pane_id=pane_id,
         cwd="/tmp",
+        backend_type=backend_type,
     )
 
 
@@ -543,6 +546,71 @@ class TestPlanApprovalValidation:
         assert "recipient" in result.content[0].text.lower()
 
 
+@pytest.fixture
+async def opencode_client(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(teams, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(
+        "claude_teams.server.discover_harness_binary",
+        lambda name: "/usr/bin/echo" if name in ("claude", "opencode") else None,
+    )
+    monkeypatch.setattr(
+        "claude_teams.server.discover_opencode_models",
+        lambda binary: ["anthropic/claude-opus-4-6", "openai/gpt-5.2-codex"],
+    )
+    monkeypatch.setattr("claude_teams.spawner.subprocess.run", lambda *a, **kw: type("R", (), {"stdout": "%99\n"})())
+    (tmp_path / "teams").mkdir()
+    (tmp_path / "tasks").mkdir()
+    async with Client(mcp) as c:
+        yield c
+
+
+@pytest.fixture
+async def opencode_only_client(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(teams, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(
+        "claude_teams.server.discover_harness_binary",
+        lambda name: "/usr/bin/echo" if name == "opencode" else None,
+    )
+    monkeypatch.setattr(
+        "claude_teams.server.discover_opencode_models",
+        lambda binary: ["anthropic/claude-opus-4-6"],
+    )
+    (tmp_path / "teams").mkdir()
+    (tmp_path / "tasks").mkdir()
+    async with Client(mcp) as c:
+        yield c
+
+
+class TestBuildSpawnDescription:
+    def test_both_backends_available(self) -> None:
+        desc = _build_spawn_description("/bin/claude", "/bin/opencode", ["model-a", "model-b"])
+        assert "'claude'" in desc
+        assert "'opencode'" in desc
+        assert "model-a" in desc
+        assert "model-b" in desc
+
+    def test_only_claude_available(self) -> None:
+        desc = _build_spawn_description("/bin/claude", None, [])
+        assert "'claude'" in desc
+        assert "'opencode'" not in desc
+
+    def test_only_opencode_available(self) -> None:
+        desc = _build_spawn_description(None, "/bin/opencode", ["model-x"])
+        assert "'claude'" not in desc
+        assert "'opencode'" in desc
+        assert "model-x" in desc
+
+    def test_opencode_with_no_models(self) -> None:
+        desc = _build_spawn_description("/bin/claude", "/bin/opencode", [])
+        assert "none discovered" in desc
+
+
 class TestSpawnBackendType:
     async def test_should_reject_opencode_when_binary_not_found(self, client: Client):
         await client.call_tool("team_create", {"team_name": "tbt1"})
@@ -558,3 +626,61 @@ class TestSpawnBackendType:
         )
         assert result.is_error is True
         assert "opencode" in result.content[0].text.lower()
+
+    async def test_should_spawn_opencode_teammate_successfully(self, opencode_client: Client):
+        await opencode_client.call_tool("team_create", {"team_name": "tbt2"})
+        result = await opencode_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "tbt2",
+                "name": "oc-worker",
+                "prompt": "do opencode stuff",
+                "backend_type": "opencode",
+                "model": "anthropic/claude-opus-4-6",
+            },
+        )
+        data = _data(result)
+        assert data["name"] == "oc-worker"
+        assert data["agent_id"] == "oc-worker@tbt2"
+
+    async def test_should_reject_claude_when_binary_not_found(self, opencode_only_client: Client):
+        await opencode_only_client.call_tool("team_create", {"team_name": "tbt3"})
+        result = await opencode_only_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "tbt3",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "claude",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "claude" in result.content[0].text.lower()
+
+
+class TestShutdownOpencodeTeammate:
+    async def test_shutdown_approved_includes_opencode_backend_type(self, opencode_client: Client):
+        await opencode_client.call_tool("team_create", {"team_name": "tsd1"})
+        teams.add_member("tsd1", _make_teammate("oc-worker", "tsd1", pane_id="%55", backend_type="opencode"))
+        await opencode_client.call_tool(
+            "send_message",
+            {
+                "team_name": "tsd1",
+                "type": "shutdown_response",
+                "sender": "oc-worker",
+                "request_id": "req-oc-1",
+                "approve": True,
+            },
+        )
+        inbox = _data(
+            await opencode_client.call_tool(
+                "read_inbox", {"team_name": "tsd1", "agent_name": "team-lead"}
+            )
+        )
+        assert len(inbox) == 1
+        payload = json.loads(inbox[0]["text"])
+        assert payload["type"] == "shutdown_approved"
+        assert payload["backendType"] == "opencode"
+        assert payload["paneId"] == "%55"
+        assert payload["from"] == "oc-worker"

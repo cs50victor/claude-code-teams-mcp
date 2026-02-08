@@ -242,7 +242,7 @@ def send_message(
                     member = m
                     break
             pane_id = member.tmux_pane_id if member else ""
-            backend = member.backend_type if member else "tmux"
+            backend = member.backend_type if member else "claude"
             payload = ShutdownApproved(
                 request_id=request_id,
                 from_=sender,

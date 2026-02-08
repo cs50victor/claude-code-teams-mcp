@@ -11,6 +11,7 @@ from claude_teams.spawner import (
     assign_color,
     build_opencode_spawn_command,
     build_spawn_command,
+    discover_harness_binary,
     discover_opencode_models,
     kill_tmux_pane,
     spawn_teammate,
@@ -34,6 +35,7 @@ def _make_member(
     model: str = "sonnet",
     agent_type: str = "general-purpose",
     cwd: str = "/tmp",
+    backend_type: str = "claude",
 ) -> TeammateMember:
     return TeammateMember(
         agent_id=f"{name}@{team}",
@@ -45,6 +47,7 @@ def _make_member(
         joined_at=0,
         tmux_pane_id="",
         cwd=cwd,
+        backend_type=backend_type,
     )
 
 
@@ -191,6 +194,32 @@ class TestBuildOpencodeSpawnCommand:
         assert "send_message" in cmd
         assert "Do research" in cmd
 
+    def test_should_handle_special_characters_in_prompt(self) -> None:
+        member = _make_member("researcher")
+        member.prompt = "Use 'single quotes' and \"double quotes\" and $variables"
+        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
+        assert "/usr/local/bin/opencode" in cmd
+        assert "run" in cmd
+
+    def test_should_handle_special_characters_in_name(self) -> None:
+        member = _make_member("my-agent_01")
+        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
+        assert "my-agent_01" in cmd
+
+    def test_should_handle_prompt_with_curly_braces(self) -> None:
+        member = _make_member("researcher")
+        member.prompt = "Run {cmd} and parse {output}"
+        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
+        assert "Run {cmd}" in cmd
+        assert "{output}" in cmd
+
+    def test_should_handle_empty_prompt(self) -> None:
+        member = _make_member("researcher")
+        member.prompt = ""
+        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
+        assert "/usr/local/bin/opencode" in cmd
+        assert "run" in cmd
+
 
 class TestSpawnTeammateBackendType:
     def test_should_reject_opencode_when_binary_missing(self, team_dir: Path) -> None:
@@ -232,6 +261,68 @@ class TestSpawnTeammateBackendType:
         assert "run" in cmd_str
         assert "--format json" in cmd_str
         assert "CLAUDECODE=1" not in cmd_str
+
+    def test_should_reject_claude_when_binary_missing(self, team_dir: Path) -> None:
+        with pytest.raises(ValueError, match="claude"):
+            spawn_teammate(
+                TEAM, "worker", "prompt", None, SESSION_ID,
+                base_dir=team_dir, backend_type="claude",
+            )
+
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_persist_backend_type_to_config(
+        self, mock_subprocess: MagicMock, team_dir: Path
+    ) -> None:
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        spawn_teammate(
+            TEAM, "oc-worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+        )
+        config = teams.read_config(TEAM, base_dir=team_dir)
+        found = [m for m in config.members if isinstance(m, TeammateMember) and m.name == "oc-worker"]
+        assert len(found) == 1
+        assert found[0].backend_type == "opencode"
+
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_write_raw_prompt_to_inbox_not_wrapped(
+        self, mock_subprocess: MagicMock, team_dir: Path
+    ) -> None:
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        raw_prompt = "Analyze the codebase"
+        spawn_teammate(
+            TEAM, "oc-reader", raw_prompt, "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+        )
+        msgs = messaging.read_inbox(TEAM, "oc-reader", base_dir=team_dir)
+        assert len(msgs) == 1
+        assert msgs[0].text == raw_prompt
+        assert "team member" not in msgs[0].text
+
+
+class TestDiscoverHarnessBinary:
+    @patch("claude_teams.spawner.shutil.which")
+    def test_should_find_claude_binary(self, mock_which: MagicMock) -> None:
+        mock_which.return_value = "/usr/local/bin/claude"
+        assert discover_harness_binary("claude") == "/usr/local/bin/claude"
+        mock_which.assert_called_once_with("claude")
+
+    @patch("claude_teams.spawner.shutil.which")
+    def test_should_return_none_when_claude_not_found(self, mock_which: MagicMock) -> None:
+        mock_which.return_value = None
+        assert discover_harness_binary("claude") is None
+
+    @patch("claude_teams.spawner.shutil.which")
+    def test_should_find_opencode_binary(self, mock_which: MagicMock) -> None:
+        mock_which.return_value = "/usr/local/bin/opencode"
+        assert discover_harness_binary("opencode") == "/usr/local/bin/opencode"
+        mock_which.assert_called_once_with("opencode")
+
+    @patch("claude_teams.spawner.shutil.which")
+    def test_should_return_none_when_opencode_not_found(self, mock_which: MagicMock) -> None:
+        mock_which.return_value = None
+        assert discover_harness_binary("opencode") is None
 
 
 class TestDiscoverOpencodeModels:
