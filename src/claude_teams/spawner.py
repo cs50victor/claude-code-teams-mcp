@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import subprocess
@@ -31,6 +32,27 @@ Start by reading your inbox for instructions.
 
 def discover_harness_binary(name: str) -> str | None:
     return shutil.which(name)
+
+
+def use_tmux_windows() -> bool:
+    """Return True when teammate processes should be spawned in tmux windows."""
+    return os.environ.get("USE_TMUX_WINDOWS") is not None
+
+
+def build_tmux_spawn_args(command: str, name: str) -> list[str]:
+    """Build the tmux command used to spawn a teammate process."""
+    if use_tmux_windows():
+        return [
+            "tmux",
+            "new-window",
+            "-dP",
+            "-F",
+            "#{window_id}",
+            "-n",
+            name,
+            command,
+        ]
+    return ["tmux", "split-window", "-dP", "-F", "#{pane_id}", command]
 
 
 def discover_opencode_models(opencode_binary: str) -> list[str]:
@@ -201,7 +223,7 @@ def spawn_teammate(
             cmd = build_spawn_command(member, claude_binary, lead_session_id)
 
         result = subprocess.run(
-            ["tmux", "split-window", "-dP", "-F", "#{pane_id}", cmd],
+            build_tmux_spawn_args(cmd, name),
             capture_output=True,
             text=True,
             check=True,
@@ -236,4 +258,7 @@ def spawn_teammate(
 
 
 def kill_tmux_pane(pane_id: str) -> None:
+    if pane_id.startswith("@"):
+        subprocess.run(["tmux", "kill-window", "-t", pane_id], check=False)
+        return
     subprocess.run(["tmux", "kill-pane", "-t", pane_id], check=False)

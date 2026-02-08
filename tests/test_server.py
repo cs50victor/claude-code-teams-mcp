@@ -832,6 +832,16 @@ async def opencode_only_client(tmp_path: Path, monkeypatch):
 
 
 class TestBuildSpawnDescription:
+    def test_should_reference_tmux_pane_by_default(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        desc = _build_spawn_description("/bin/claude", None, [])
+        assert "tmux pane" in desc
+
+    def test_should_reference_tmux_window_when_enabled(self, monkeypatch) -> None:
+        monkeypatch.setenv("USE_TMUX_WINDOWS", "1")
+        desc = _build_spawn_description("/bin/claude", None, [])
+        assert "tmux window" in desc
+
     def test_both_backends_available(self) -> None:
         desc = _build_spawn_description(
             "/bin/claude",

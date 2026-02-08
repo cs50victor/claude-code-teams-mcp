@@ -64,7 +64,7 @@ Or add to `~/.config/opencode/opencode.json` (OpenCode):
 |------|-------------|
 | `team_create` | Create a new agent team. One team per server session. |
 | `team_delete` | Delete a team and all its data. Fails if teammates are still active. |
-| `spawn_teammate` | Spawn a teammate in a tmux pane (Claude or OpenCode backend). |
+| `spawn_teammate` | Spawn a teammate in tmux (pane by default, window when `USE_TMUX_WINDOWS` is set). |
 | `send_message` | Send direct messages, broadcasts, shutdown/plan approval responses. |
 | `read_inbox` | Read messages from an agent's inbox. |
 | `poll_inbox` | Long-poll an inbox for new messages (up to 30s). |
@@ -73,12 +73,12 @@ Or add to `~/.config/opencode/opencode.json` (OpenCode):
 | `task_update` | Update task status, owner, dependencies, or metadata. |
 | `task_list` | List all tasks for a team. |
 | `task_get` | Get full details of a specific task. |
-| `force_kill_teammate` | Forcibly kill a teammate's tmux pane and clean up. |
+| `force_kill_teammate` | Forcibly kill a teammate's tmux pane/window and clean up. |
 | `process_shutdown_approved` | Remove a teammate after graceful shutdown approval. |
 
 ## How it works
 
-- **Spawning**: Teammates launch in tmux panes via `tmux split-window`. Backend can be Claude (`claude`) or OpenCode (`opencode`). Each gets a unique agent ID (`name@team`) and color.
+- **Spawning**: Teammates launch in tmux via `tmux split-window` (default) or `tmux new-window` when `USE_TMUX_WINDOWS` is set. Backend can be Claude (`claude`) or OpenCode (`opencode`). Each gets a unique agent ID (`name@team`) and color.
 - **Messaging**: JSON-based inboxes under `~/.claude/teams/<team>/inboxes/`. File locking (`fcntl`) prevents corruption from concurrent reads/writes.
 - **Tasks**: JSON task files under `~/.claude/tasks/<team>/`. Tasks have status tracking, ownership, and dependency management (`blocks`/`blockedBy`).
 - **Concurrency safety**: Atomic writes via `tempfile` + `os.replace` for config. `fcntl` file locks for inbox operations.

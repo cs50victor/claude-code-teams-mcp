@@ -167,6 +167,29 @@ class TestSpawnTeammate:
         found = [m for m in config.members if m.name == "researcher"]
         assert found[0].tmux_pane_id == "%42"
 
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_use_new_window_when_enabled(
+        self,
+        mock_subprocess: MagicMock,
+        team_dir: Path,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setenv("USE_TMUX_WINDOWS", "0")
+        mock_subprocess.run.return_value.stdout = "@42\n"
+        member = spawn_teammate(
+            TEAM,
+            "window-worker",
+            "Do research",
+            "/usr/local/bin/claude",
+            SESSION_ID,
+            base_dir=team_dir,
+        )
+        assert member.tmux_pane_id == "@42"
+        call_args = mock_subprocess.run.call_args[0][0]
+        assert call_args[:5] == ["tmux", "new-window", "-dP", "-F", "#{window_id}"]
+        assert "-n" in call_args
+        assert call_args[call_args.index("-n") + 1] == "window-worker"
+
     @patch("claude_teams.spawner.subprocess.run")
     def test_should_rollback_member_when_tmux_spawn_fails(
         self, mock_run: MagicMock, team_dir: Path
@@ -195,6 +218,15 @@ class TestKillTmuxPane:
         kill_tmux_pane("%99")
         mock_subprocess.run.assert_called_once_with(
             ["tmux", "kill-pane", "-t", "%99"], check=False
+        )
+
+    @patch("claude_teams.spawner.subprocess")
+    def test_calls_kill_window_for_window_target(
+        self, mock_subprocess: MagicMock
+    ) -> None:
+        kill_tmux_pane("@99")
+        mock_subprocess.run.assert_called_once_with(
+            ["tmux", "kill-window", "-t", "@99"], check=False
         )
 
 

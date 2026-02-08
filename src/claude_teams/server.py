@@ -25,13 +25,14 @@ from claude_teams.spawner import (
     discover_opencode_models,
     kill_tmux_pane,
     spawn_teammate,
+    use_tmux_windows,
 )
 
 logger = logging.getLogger(__name__)
 
 
 _SPAWN_TOOL_BASE_DESCRIPTION = (
-    "Spawn a new teammate in a tmux pane. The teammate receives its initial "
+    "Spawn a new teammate in a tmux {target}. The teammate receives its initial "
     "prompt via inbox and begins working autonomously. Names must be unique "
     "within the team."
 )
@@ -44,7 +45,8 @@ def _build_spawn_description(
     opencode_server_url: str | None = None,
     opencode_agents: list[dict] | None = None,
 ) -> str:
-    parts = [_SPAWN_TOOL_BASE_DESCRIPTION]
+    tmux_target = "window" if use_tmux_windows() else "pane"
+    parts = [_SPAWN_TOOL_BASE_DESCRIPTION.format(target=tmux_target)]
     backends = []
     if claude_binary:
         backends.append("'claude' (default, models: sonnet, opus, haiku)")
@@ -162,7 +164,7 @@ def spawn_teammate_tool(
     plan_mode_required: bool = False,
     backend_type: Literal["claude", "opencode"] = "claude",
 ) -> dict:
-    """Spawn a new teammate in a tmux pane. Description is dynamically updated
+    """Spawn a new teammate in tmux. Description is dynamically updated
     at startup with available backends and models."""
     ls = _get_lifespan(ctx)
     opencode_agent = None
@@ -558,9 +560,9 @@ def read_config(team_name: str) -> dict:
 
 @mcp.tool
 def force_kill_teammate(team_name: str, agent_name: str, ctx: Context) -> dict:
-    """Forcibly kill a teammate's tmux pane. Use when graceful shutdown via
+    """Forcibly kill a teammate's tmux target. Use when graceful shutdown via
     send_message(type='shutdown_request') is not possible or not responding.
-    Kills the tmux pane, removes member from config, and resets their tasks."""
+    Kills the tmux pane/window, removes member from config, and resets their tasks."""
     oc_url = _get_lifespan(ctx).get("opencode_server_url")
     config = teams.read_config(team_name)
     member = None
