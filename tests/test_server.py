@@ -34,7 +34,11 @@ async def client(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
     monkeypatch.setattr(
-        "claude_teams.server.discover_claude_binary", lambda: "/usr/bin/echo"
+        "claude_teams.server.discover_harness_binary",
+        lambda name: "/usr/bin/echo" if name == "claude" else None,
+    )
+    monkeypatch.setattr(
+        "claude_teams.server.discover_opencode_models", lambda binary: [],
     )
     (tmp_path / "teams").mkdir()
     (tmp_path / "tasks").mkdir()
@@ -537,3 +541,20 @@ class TestPlanApprovalValidation:
         )
         assert result.is_error is True
         assert "recipient" in result.content[0].text.lower()
+
+
+class TestSpawnBackendType:
+    async def test_should_reject_opencode_when_binary_not_found(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tbt1"})
+        result = await client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "tbt1",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "opencode",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "opencode" in result.content[0].text.lower()

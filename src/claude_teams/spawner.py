@@ -11,14 +11,43 @@ from claude_teams.models import COLOR_PALETTE, InboxMessage, TeammateMember
 from claude_teams.teams import _VALID_NAME_RE
 
 
-def discover_claude_binary() -> str:
-    path = shutil.which("claude")
-    if path is None:
-        raise FileNotFoundError(
-            "Could not find 'claude' binary on PATH. "
-            "Install Claude Code or ensure it is in your PATH."
+_OPENCODE_PROMPT_WRAPPER = """\
+You are team member '{name}' on team '{team_name}'.
+
+You have MCP tools from the claude-teams server for team coordination:
+- poll_inbox(team_name="{team_name}", agent_name="{name}") - Check for new messages
+- send_message(team_name="{team_name}", type="message", recipient="team-lead", content="...", summary="...") - Message teammates
+- task_list(team_name="{team_name}") - View team tasks
+- task_update(team_name="{team_name}", task_id="...", status="...") - Update task status
+- task_get(team_name="{team_name}", task_id="...") - Get task details
+
+Start by reading your inbox for instructions.
+
+---
+
+{prompt}"""
+
+
+def discover_harness_binary(name: str) -> str | None:
+    return shutil.which(name)
+
+
+def discover_opencode_models(opencode_binary: str) -> list[str]:
+    """Run ``opencode models --refresh`` and return available model names."""
+    try:
+        result = subprocess.run(
+            [opencode_binary, "models", "--refresh"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
-    return path
+        if result.returncode != 0:
+            return []
+        lines = result.stdout.strip().splitlines()
+        # First line is status message, rest are model names
+        return [line.strip() for line in lines[1:] if line.strip()]
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
 
 
 def assign_color(team_name: str, base_dir: Path | None = None) -> str:
@@ -50,6 +79,27 @@ def build_spawn_command(
     return cmd
 
 
+def build_opencode_spawn_command(
+    member: TeammateMember,
+    opencode_binary: str,
+    team_name: str,
+) -> str:
+    wrapped_prompt = _OPENCODE_PROMPT_WRAPPER.format(
+        name=member.name,
+        team_name=team_name,
+        prompt=member.prompt,
+    )
+    model = member.model
+    cmd = (
+        f"cd {shlex.quote(member.cwd)} && "
+        f"{shlex.quote(opencode_binary)} run "
+        f"--format json "
+        f"--model {shlex.quote(model)} "
+        f"{shlex.quote(wrapped_prompt)}"
+    )
+    return cmd
+
+
 def spawn_teammate(
     team_name: str,
     name: str,
@@ -62,6 +112,8 @@ def spawn_teammate(
     cwd: str | None = None,
     plan_mode_required: bool = False,
     base_dir: Path | None = None,
+    backend_type: str = "claude",
+    opencode_binary: str | None = None,
 ) -> TeammateMember:
     if not _VALID_NAME_RE.match(name):
         raise ValueError(f"Invalid agent name: {name!r}. Use only letters, numbers, hyphens, underscores.")
@@ -69,6 +121,16 @@ def spawn_teammate(
         raise ValueError(f"Agent name too long ({len(name)} chars, max 64)")
     if name == "team-lead":
         raise ValueError("Agent name 'team-lead' is reserved")
+    if backend_type == "opencode" and not opencode_binary:
+        raise ValueError(
+            "Cannot spawn opencode teammate: 'opencode' binary not found on PATH. "
+            "Install OpenCode or ensure it is in your PATH."
+        )
+    if backend_type == "claude" and not claude_binary:
+        raise ValueError(
+            "Cannot spawn claude teammate: 'claude' binary not found on PATH. "
+            "Install Claude Code or ensure it is in your PATH."
+        )
 
     color = assign_color(team_name, base_dir)
     now_ms = int(time.time() * 1000)
@@ -84,7 +146,7 @@ def spawn_teammate(
         joined_at=now_ms,
         tmux_pane_id="",
         cwd=cwd or str(Path.cwd()),
-        backend_type="tmux",
+        backend_type=backend_type,
         is_active=False,
     )
 
@@ -99,7 +161,10 @@ def spawn_teammate(
     )
     messaging.append_message(team_name, name, initial_msg, base_dir)
 
-    cmd = build_spawn_command(member, claude_binary, lead_session_id)
+    if backend_type == "opencode":
+        cmd = build_opencode_spawn_command(member, opencode_binary, team_name)
+    else:
+        cmd = build_spawn_command(member, claude_binary, lead_session_id)
     result = subprocess.run(
         ["tmux", "split-window", "-dP", "-F", "#{pane_id}", cmd],
         capture_output=True,

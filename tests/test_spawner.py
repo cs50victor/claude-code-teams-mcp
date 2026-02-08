@@ -9,8 +9,9 @@ from claude_teams import teams, messaging
 from claude_teams.models import COLOR_PALETTE, TeammateMember
 from claude_teams.spawner import (
     assign_color,
+    build_opencode_spawn_command,
     build_spawn_command,
-    discover_claude_binary,
+    discover_opencode_models,
     kill_tmux_pane,
     spawn_teammate,
 )
@@ -45,20 +46,6 @@ def _make_member(
         tmux_pane_id="",
         cwd=cwd,
     )
-
-
-class TestDiscoverClaudeBinary:
-    @patch("claude_teams.spawner.shutil.which")
-    def test_found(self, mock_which: MagicMock) -> None:
-        mock_which.return_value = "/usr/local/bin/claude"
-        assert discover_claude_binary() == "/usr/local/bin/claude"
-        mock_which.assert_called_once_with("claude")
-
-    @patch("claude_teams.spawner.shutil.which")
-    def test_not_found(self, mock_which: MagicMock) -> None:
-        mock_which.return_value = None
-        with pytest.raises(FileNotFoundError):
-            discover_claude_binary()
 
 
 class TestAssignColor:
@@ -179,3 +166,105 @@ class TestKillTmuxPane:
         mock_subprocess.run.assert_called_once_with(
             ["tmux", "kill-pane", "-t", "%99"], check=False
         )
+
+
+
+class TestBuildOpencodeSpawnCommand:
+    def test_should_contain_opencode_run_with_format_and_model(self) -> None:
+        member = _make_member("researcher", model="anthropic/claude-sonnet-4-5-20250929")
+        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
+        assert "/usr/local/bin/opencode" in cmd
+        assert "run" in cmd
+        assert "--format json" in cmd
+        assert "--model" in cmd
+        assert "anthropic/claude-sonnet-4-5-20250929" in cmd
+        assert "cd /tmp" in cmd
+
+    def test_should_wrap_prompt_with_team_context(self) -> None:
+        member = _make_member("researcher")
+        member.prompt = "Do research"
+        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
+        assert "team member" in cmd
+        assert "researcher" in cmd
+        assert TEAM in cmd
+        assert "poll_inbox" in cmd
+        assert "send_message" in cmd
+        assert "Do research" in cmd
+
+
+class TestSpawnTeammateBackendType:
+    def test_should_reject_opencode_when_binary_missing(self, team_dir: Path) -> None:
+        with pytest.raises(ValueError, match="opencode"):
+            spawn_teammate(
+                TEAM, "worker", "prompt", "/bin/echo", SESSION_ID,
+                base_dir=team_dir, backend_type="opencode", opencode_binary=None,
+            )
+
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_use_claude_command_for_claude_backend(
+        self, mock_subprocess: MagicMock, team_dir: Path
+    ) -> None:
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        member = spawn_teammate(
+            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="claude",
+        )
+        assert member.backend_type == "claude"
+        call_args = mock_subprocess.run.call_args[0][0]
+        cmd_str = call_args[-1]
+        assert "CLAUDECODE=1" in cmd_str
+        assert "--agent-id" in cmd_str
+
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_use_opencode_command_for_opencode_backend(
+        self, mock_subprocess: MagicMock, team_dir: Path
+    ) -> None:
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        member = spawn_teammate(
+            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+        )
+        assert member.backend_type == "opencode"
+        call_args = mock_subprocess.run.call_args[0][0]
+        cmd_str = call_args[-1]
+        assert "/usr/local/bin/opencode" in cmd_str
+        assert "run" in cmd_str
+        assert "--format json" in cmd_str
+        assert "CLAUDECODE=1" not in cmd_str
+
+
+class TestDiscoverOpencodeModels:
+    @patch("claude_teams.spawner.subprocess.run")
+    def test_should_parse_model_list(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="Models cache refreshed\nanthropic/claude-opus-4-6\nopenai/gpt-5.2-codex\n",
+        )
+        models = discover_opencode_models("/usr/local/bin/opencode")
+        assert models == ["anthropic/claude-opus-4-6", "openai/gpt-5.2-codex"]
+        mock_run.assert_called_once_with(
+            ["/usr/local/bin/opencode", "models", "--refresh"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    @patch("claude_teams.spawner.subprocess.run")
+    def test_should_return_empty_on_failure(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        assert discover_opencode_models("/usr/local/bin/opencode") == []
+
+    @patch("claude_teams.spawner.subprocess.run")
+    def test_should_return_empty_on_timeout(self, mock_run: MagicMock) -> None:
+        import subprocess as sp
+        mock_run.side_effect = sp.TimeoutExpired(cmd="opencode", timeout=30)
+        assert discover_opencode_models("/usr/local/bin/opencode") == []
+
+    @patch("claude_teams.spawner.subprocess.run")
+    def test_should_skip_blank_lines(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="Models cache refreshed\n\nanthropic/claude-opus-4-6\n\n",
+        )
+        assert discover_opencode_models("/bin/opencode") == ["anthropic/claude-opus-4-6"]

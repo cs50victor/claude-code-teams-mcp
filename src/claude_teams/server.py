@@ -16,14 +16,60 @@ from claude_teams.models import (
     SpawnResult,
     TeammateMember,
 )
-from claude_teams.spawner import discover_claude_binary, kill_tmux_pane, spawn_teammate
+from claude_teams.spawner import (
+    discover_harness_binary,
+    discover_opencode_models,
+    kill_tmux_pane,
+    spawn_teammate,
+)
+
+
+_SPAWN_TOOL_BASE_DESCRIPTION = (
+    "Spawn a new teammate in a tmux pane. The teammate receives its initial "
+    "prompt via inbox and begins working autonomously. Names must be unique "
+    "within the team."
+)
+
+
+def _build_spawn_description(
+    claude_binary: str | None,
+    opencode_binary: str | None,
+    opencode_models: list[str],
+) -> str:
+    parts = [_SPAWN_TOOL_BASE_DESCRIPTION]
+    backends = []
+    if claude_binary:
+        backends.append("'claude' (default, models: sonnet, opus, haiku)")
+    if opencode_binary:
+        model_list = ", ".join(opencode_models) if opencode_models else "none discovered"
+        backends.append(f"'opencode' (models: {model_list})")
+    if backends:
+        parts.append(f"Available backends: {'; '.join(backends)}.")
+    return " ".join(parts)
 
 
 @lifespan
 async def app_lifespan(server):
-    claude_binary = discover_claude_binary()
+    claude_binary = discover_harness_binary("claude")
+    opencode_binary = discover_harness_binary("opencode")
+    if not claude_binary and not opencode_binary:
+        raise FileNotFoundError(
+            "No coding agent binary found on PATH. "
+            "Install Claude Code ('claude') or OpenCode ('opencode')."
+        )
+    opencode_models: list[str] = []
+    if opencode_binary:
+        opencode_models = discover_opencode_models(opencode_binary)
+    # Patch spawn_teammate tool description with discovered models
+    tool = await mcp.get_tool("spawn_teammate")
+    tool.description = _build_spawn_description(claude_binary, opencode_binary, opencode_models)
     session_id = str(uuid.uuid4())
-    yield {"claude_binary": claude_binary, "session_id": session_id, "active_team": None}
+    yield {
+        "claude_binary": claude_binary,
+        "opencode_binary": opencode_binary,
+        "session_id": session_id,
+        "active_team": None,
+    }
 
 
 mcp = FastMCP(
@@ -75,24 +121,29 @@ def spawn_teammate_tool(
     name: str,
     prompt: str,
     ctx: Context,
-    model: Literal["sonnet", "opus", "haiku"] = "sonnet",
+    model: str = "sonnet",
     subagent_type: str = "general-purpose",
     plan_mode_required: bool = False,
+    backend_type: Literal["claude", "opencode"] = "claude",
 ) -> dict:
-    """Spawn a new Claude Code teammate in a tmux pane. The teammate receives
-    its initial prompt via inbox and begins working autonomously. Names must
-    be unique within the team."""
+    """Spawn a new teammate in a tmux pane. Description is dynamically updated
+    at startup with available backends and models."""
     ls = _get_lifespan(ctx)
-    member = spawn_teammate(
-        team_name=team_name,
-        name=name,
-        prompt=prompt,
-        claude_binary=ls["claude_binary"],
-        lead_session_id=ls["session_id"],
-        model=model,
-        subagent_type=subagent_type,
-        plan_mode_required=plan_mode_required,
-    )
+    try:
+        member = spawn_teammate(
+            team_name=team_name,
+            name=name,
+            prompt=prompt,
+            claude_binary=ls["claude_binary"],
+            lead_session_id=ls["session_id"],
+            model=model,
+            subagent_type=subagent_type,
+            plan_mode_required=plan_mode_required,
+            backend_type=backend_type,
+            opencode_binary=ls["opencode_binary"],
+        )
+    except ValueError as e:
+        raise ToolError(str(e))
     return SpawnResult(
         agent_id=member.agent_id,
         name=member.name,
