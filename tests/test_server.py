@@ -570,6 +570,10 @@ async def opencode_client(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("claude_teams.server.opencode_client.send_prompt_async", lambda *a, **kw: None)
     monkeypatch.setattr("claude_teams.server.opencode_client.abort_session", lambda *a, **kw: None)
     monkeypatch.setattr("claude_teams.server.opencode_client.delete_session", lambda *a, **kw: None)
+    monkeypatch.setattr("claude_teams.server.opencode_client.list_agents", lambda url: [
+        {"name": "build", "description": "The default agent."},
+        {"name": "explore", "description": "Fast explorer."},
+    ])
     (tmp_path / "teams").mkdir()
     (tmp_path / "tasks").mkdir()
     async with Client(mcp) as c:
@@ -632,6 +636,28 @@ class TestBuildSpawnDescription:
         desc = _build_spawn_description("/bin/claude", "/bin/opencode", ["model-a"])
         assert "'opencode'" not in desc
         assert "'claude'" in desc
+
+    def test_should_include_agent_names_and_descriptions(self) -> None:
+        agents = [
+            {"name": "build", "description": "The default agent."},
+            {"name": "explore", "description": "Fast explorer."},
+        ]
+        desc = _build_spawn_description(
+            "/bin/claude", "/bin/opencode", ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            opencode_agents=agents,
+        )
+        assert "build: The default agent." in desc
+        assert "explore: Fast explorer." in desc
+        assert "subagent_type" in desc
+
+    def test_should_omit_agents_section_when_empty(self) -> None:
+        desc = _build_spawn_description(
+            "/bin/claude", "/bin/opencode", ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            opencode_agents=[],
+        )
+        assert "opencode agents" not in desc.lower()
 
 
 class TestSpawnBackendType:

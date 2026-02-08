@@ -129,6 +129,23 @@ def delete_session(server_url: str, session_id: str) -> None:
     _request("DELETE", f"{server_url}/session/{session_id}")
 
 
+def list_agents(server_url: str) -> list[dict]:
+    raw = _request("GET", f"{server_url}/agent")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    _OPENCODE_INTERNAL_AGENTS = {"title", "summary", "compaction"}
+    return [
+        {"name": a["name"], "description": a.get("description", "")}
+        for a in data
+        if isinstance(a, dict) and "name" in a and a.get("description")
+        and a["name"] not in _OPENCODE_INTERNAL_AGENTS
+    ]
+
+
 def get_session_status(server_url: str, session_id: str) -> str:
     raw = _request("GET", f"{server_url}/session/status")
     try:

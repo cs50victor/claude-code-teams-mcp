@@ -14,7 +14,6 @@ from claude_teams.spawner import (
     discover_harness_binary,
     discover_opencode_models,
     kill_tmux_pane,
-    map_agent_type,
     spawn_teammate,
 )
 
@@ -173,22 +172,6 @@ class TestKillTmuxPane:
 
 
 
-class TestMapAgentType:
-    def test_general_purpose_maps_to_build(self) -> None:
-        assert map_agent_type("general-purpose") == "build"
-
-    def test_explore_maps_to_explore(self) -> None:
-        assert map_agent_type("explore") == "explore"
-        assert map_agent_type("Explore") == "explore"
-
-    def test_plan_maps_to_plan(self) -> None:
-        assert map_agent_type("plan") == "plan"
-        assert map_agent_type("Plan") == "plan"
-
-    def test_unknown_defaults_to_build(self) -> None:
-        assert map_agent_type("custom-thing") == "build"
-
-
 class TestBuildOpencodeAttachCommand:
     def test_should_contain_attach_with_session_and_dir(self) -> None:
         cmd = build_opencode_attach_command(
@@ -295,6 +278,39 @@ class TestSpawnTeammateBackendType:
         mock_oc.send_prompt_async.assert_called_once()
         call_kwargs = mock_oc.send_prompt_async.call_args
         assert "Do stuff" in call_kwargs[0][2] or "Do stuff" in str(call_kwargs)
+
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_pass_opencode_agent_to_prompt(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        mock_oc.create_session.return_value = "ses_1"
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        spawn_teammate(
+            TEAM, "explorer", "Explore code", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
+            opencode_agent="explore",
+        )
+        call_kwargs = mock_oc.send_prompt_async.call_args
+        assert call_kwargs[1]["agent"] == "explore"
+
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_default_opencode_agent_to_build(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        mock_oc.create_session.return_value = "ses_1"
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        spawn_teammate(
+            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
+        )
+        call_kwargs = mock_oc.send_prompt_async.call_args
+        assert call_kwargs[1]["agent"] == "build"
 
     @patch("claude_teams.spawner.opencode_client")
     @patch("claude_teams.spawner.subprocess")

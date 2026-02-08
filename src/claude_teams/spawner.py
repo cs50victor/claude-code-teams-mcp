@@ -28,15 +28,6 @@ Start by reading your inbox for instructions.
 
 {prompt}"""
 
-_AGENT_TYPE_MAP = {
-    "general-purpose": "build",
-    "explore": "explore",
-    "plan": "plan",
-}
-
-
-def map_agent_type(subagent_type: str) -> str:
-    return _AGENT_TYPE_MAP.get(subagent_type.lower(), "build")
 
 
 def discover_harness_binary(name: str) -> str | None:
@@ -119,6 +110,7 @@ def spawn_teammate(
     backend_type: str = "claude",
     opencode_binary: str | None = None,
     opencode_server_url: str | None = None,
+    opencode_agent: str | None = None,
 ) -> TeammateMember:
     if not _VALID_NAME_RE.match(name):
         raise ValueError(f"Invalid agent name: {name!r}. Use only letters, numbers, hyphens, underscores.")
@@ -191,7 +183,7 @@ def spawn_teammate(
             opencode_server_url,
             opencode_session_id,
             wrapped,
-            agent=map_agent_type(subagent_type),
+            agent=opencode_agent or "build",
         )
         cmd = build_opencode_attach_command(
             opencode_binary, opencode_server_url, opencode_session_id, resolved_cwd,

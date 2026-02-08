@@ -41,6 +41,7 @@ def _build_spawn_description(
     opencode_binary: str | None,
     opencode_models: list[str],
     opencode_server_url: str | None = None,
+    opencode_agents: list[dict] | None = None,
 ) -> str:
     parts = [_SPAWN_TOOL_BASE_DESCRIPTION]
     backends = []
@@ -51,6 +52,9 @@ def _build_spawn_description(
         backends.append(f"'opencode' (models: {model_list})")
     if backends:
         parts.append(f"Available backends: {'; '.join(backends)}.")
+    if opencode_agents:
+        agent_lines = [f"  - {a['name']}: {a['description']}" for a in opencode_agents]
+        parts.append("Available opencode agents (pass as subagent_type when backend_type='opencode'):\n" + "\n".join(agent_lines))
     return " ".join(parts)
 
 
@@ -65,17 +69,24 @@ async def app_lifespan(server):
         )
     opencode_server_url = os.environ.get("OPENCODE_SERVER_URL")
     opencode_models: list[str] = []
+    opencode_agents: list[dict] = []
     if opencode_binary:
         opencode_models = discover_opencode_models(opencode_binary)
+    if opencode_server_url:
+        try:
+            opencode_agents = opencode_client.list_agents(opencode_server_url)
+        except opencode_client.OpenCodeAPIError:
+            logger.warning("Failed to fetch opencode agents from %s", opencode_server_url)
     tool = await mcp.get_tool("spawn_teammate")
     tool.description = _build_spawn_description(
-        claude_binary, opencode_binary, opencode_models, opencode_server_url,
+        claude_binary, opencode_binary, opencode_models, opencode_server_url, opencode_agents,
     )
     session_id = str(uuid.uuid4())
     yield {
         "claude_binary": claude_binary,
         "opencode_binary": opencode_binary,
         "opencode_server_url": opencode_server_url,
+        "opencode_agents": opencode_agents,
         "session_id": session_id,
         "active_team": None,
     }
@@ -138,6 +149,10 @@ def spawn_teammate_tool(
     """Spawn a new teammate in a tmux pane. Description is dynamically updated
     at startup with available backends and models."""
     ls = _get_lifespan(ctx)
+    opencode_agent = None
+    if backend_type == "opencode":
+        known = {a["name"] for a in ls.get("opencode_agents", [])}
+        opencode_agent = subagent_type if subagent_type in known else "build"
     try:
         member = spawn_teammate(
             team_name=team_name,
@@ -151,6 +166,7 @@ def spawn_teammate_tool(
             backend_type=backend_type,
             opencode_binary=ls["opencode_binary"],
             opencode_server_url=ls["opencode_server_url"],
+            opencode_agent=opencode_agent,
         )
     except (ValueError, OpenCodeAPIError) as e:
         raise ToolError(str(e))
