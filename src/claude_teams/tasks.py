@@ -1,27 +1,15 @@
 from __future__ import annotations
 
-import fcntl
 import json
 from collections import deque
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from claude_teams._filelock import file_lock
 from claude_teams.models import TaskFile
 from claude_teams.teams import team_exists
 
 TASKS_DIR = Path.home() / ".claude" / "tasks"
-
-
-@contextmanager
-def file_lock(lock_path: Path):
-    lock_path.touch(exist_ok=True)
-    with open(lock_path) as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _tasks_dir(base_dir: Path | None = None) -> Path:

@@ -165,14 +165,13 @@ def test_send_shutdown_request_with_reason(tmp_claude_dir):
 
 
 def test_should_not_lose_message_appended_during_mark_as_read(tmp_claude_dir):
-    import fcntl
+    from filelock import FileLock
 
     msg_a = InboxMessage(from_="lead", text="A", timestamp=now_iso(), read=False, summary="a")
     append_message("test-team", "race", msg_a, base_dir=tmp_claude_dir)
 
     path = inbox_path("test-team", "race", base_dir=tmp_claude_dir)
     lock_path = path.parent / ".lock"
-    lock_path.touch(exist_ok=True)
 
     completed = threading.Event()
 
@@ -180,12 +179,14 @@ def test_should_not_lose_message_appended_during_mark_as_read(tmp_claude_dir):
         read_inbox("test-team", "race", mark_as_read=True, base_dir=tmp_claude_dir)
         completed.set()
 
-    with open(lock_path) as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    lock = FileLock(str(lock_path))
+    lock.acquire()
+    try:
         reader = threading.Thread(target=do_read)
         reader.start()
         completed_without_lock = completed.wait(timeout=1.0)
-        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock.release()
 
     reader.join(timeout=5)
 

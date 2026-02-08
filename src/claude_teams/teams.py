@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -95,6 +96,23 @@ def read_config(name: str, base_dir: Path | None = None) -> TeamConfig:
     return TeamConfig.model_validate(raw)
 
 
+def _replace_with_retry(
+    src: str | os.PathLike, dst: str | os.PathLike, retries: int = 5, base_delay: float = 0.05
+) -> None:
+    for attempt in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            # NOTE(victor): On Windows, os.replace raises PermissionError when
+            # antivirus or another process holds the target file handle briefly.
+            # On Unix this indicates a real permissions issue, so we only retry
+            # on Windows.
+            if sys.platform != "win32" or attempt == retries - 1:
+                raise
+            time.sleep(base_delay * (2**attempt))
+
+
 def write_config(name: str, config: TeamConfig, base_dir: Path | None = None) -> None:
     config_dir = _teams_dir(base_dir) / name
     data = json.dumps(config.model_dump(by_alias=True, exclude_none=True), indent=2)
@@ -105,7 +123,7 @@ def write_config(name: str, config: TeamConfig, base_dir: Path | None = None) ->
         os.write(fd, data.encode())
         os.close(fd)
         fd = -1
-        os.replace(tmp_path, config_dir / "config.json")
+        _replace_with_retry(tmp_path, config_dir / "config.json")
     except BaseException:
         if fd >= 0:
             os.close(fd)
