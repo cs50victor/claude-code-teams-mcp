@@ -17,7 +17,7 @@ You are team member '{name}' on team '{team_name}'.
 
 You have MCP tools from the claude-teams server for team coordination:
 - poll_inbox(team_name="{team_name}", agent_name="{name}") - Check for new messages
-- send_message(team_name="{team_name}", type="message", recipient="team-lead", content="...", summary="...") - Message teammates
+- send_message(team_name="{team_name}", type="message", sender="{name}", recipient="team-lead", content="...", summary="...") - Message teammates
 - task_list(team_name="{team_name}") - View team tasks
 - task_update(team_name="{team_name}", task_id="...", status="...") - Update task status
 - task_get(team_name="{team_name}", task_id="...") - Get task details
