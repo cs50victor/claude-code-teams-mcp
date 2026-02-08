@@ -188,7 +188,7 @@ class TestSpawnTeammate:
         call_args = mock_subprocess.run.call_args[0][0]
         assert call_args[:5] == ["tmux", "new-window", "-dP", "-F", "#{window_id}"]
         assert "-n" in call_args
-        assert call_args[call_args.index("-n") + 1] == "window-worker"
+        assert call_args[call_args.index("-n") + 1] == "@claude-team | window-worker"
 
     @patch("claude_teams.spawner.subprocess.run")
     def test_should_rollback_member_when_tmux_spawn_fails(

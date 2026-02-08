@@ -49,7 +49,7 @@ def build_tmux_spawn_args(command: str, name: str) -> list[str]:
             "-F",
             "#{window_id}",
             "-n",
-            name,
+            f"@claude-team | {name}",
             command,
         ]
     return ["tmux", "split-window", "-dP", "-F", "#{pane_id}", command]
