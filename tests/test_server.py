@@ -94,6 +94,7 @@ class TestErrorPropagation:
 class TestDeletedTaskGuard:
     async def test_should_not_send_assignment_when_task_deleted(self, client: Client):
         await client.call_tool("team_create", {"team_name": "t2"})
+        teams.add_member("t2", _make_teammate("worker", "t2"))
         created = _data(
             await client.call_tool(
                 "task_create",
@@ -120,6 +121,7 @@ class TestDeletedTaskGuard:
         self, client: Client
     ):
         await client.call_tool("team_create", {"team_name": "t2b"})
+        teams.add_member("t2b", _make_teammate("worker", "t2b"))
         created = _data(
             await client.call_tool(
                 "task_create",
@@ -474,6 +476,49 @@ class TestSendMessageValidation:
         assert result.is_error is True
         assert "team-lead" in result.content[0].text
 
+    async def test_should_reject_self_message(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tv_self"})
+        result = await client.call_tool(
+            "send_message",
+            {
+                "team_name": "tv_self",
+                "type": "message",
+                "sender": "team-lead",
+                "recipient": "team-lead",
+                "content": "talking to myself",
+                "summary": "self",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "yourself" in result.content[0].text.lower()
+
+    async def test_should_reject_owner_not_in_team(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tv_own"})
+        created = _data(
+            await client.call_tool(
+                "task_create",
+                {"team_name": "tv_own", "subject": "x", "description": "d"},
+            )
+        )
+        result = await client.call_tool(
+            "task_update",
+            {"team_name": "tv_own", "task_id": created["id"], "owner": "ghost"},
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "ghost" in result.content[0].text
+
+    async def test_should_reject_read_inbox_for_nonexistent_agent(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tv_ri"})
+        result = await client.call_tool(
+            "read_inbox",
+            {"team_name": "tv_ri", "agent_name": "ghost"},
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "ghost" in result.content[0].text
+
     async def test_should_reject_non_lead_broadcast(self, client: Client):
         await client.call_tool("team_create", {"team_name": "tv10"})
         teams.add_member("tv10", _make_teammate("alice", "tv10"))
@@ -503,6 +548,16 @@ class TestProcessShutdownGuard:
         assert result.is_error is True
         assert "team-lead" in result.content[0].text
 
+    async def test_should_reject_shutdown_of_nonexistent_agent(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tsg2"})
+        result = await client.call_tool(
+            "process_shutdown_approved",
+            {"team_name": "tsg2", "agent_name": "ghost"},
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "ghost" in result.content[0].text
+
 
 class TestErrorWrapping:
     async def test_read_config_wraps_file_not_found(self, client: Client):
@@ -513,6 +568,22 @@ class TestErrorWrapping:
         )
         assert result.is_error is True
         assert "not found" in result.content[0].text.lower()
+
+    async def test_send_message_wraps_missing_team(self, client: Client):
+        result = await client.call_tool(
+            "send_message",
+            {
+                "team_name": "nonexistent",
+                "type": "message",
+                "recipient": "bob",
+                "content": "hi",
+                "summary": "test",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not found" in result.content[0].text.lower()
+        assert "Traceback" not in result.content[0].text
 
     async def test_task_get_wraps_file_not_found(self, client: Client):
         await client.call_tool("team_create", {"team_name": "tew"})

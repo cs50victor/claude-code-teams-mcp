@@ -259,6 +259,11 @@ def send_message(
     Type 'plan_approval_response' responds to a plan approval request (requires recipient, request_id, approve)."""
     oc_url = _get_lifespan(ctx).get("opencode_server_url")
 
+    try:
+        teams.read_config(team_name)
+    except FileNotFoundError:
+        raise ToolError(f"Team {team_name!r} not found")
+
     if type == "message":
         if not content:
             raise ToolError("Message content must not be empty")
@@ -274,6 +279,8 @@ def send_message(
             raise ToolError(
                 f"Recipient {recipient!r} is not a member of team {team_name!r}"
             )
+        if sender == recipient:
+            raise ToolError("Cannot send a message to yourself")
         if sender != "team-lead" and recipient != "team-lead":
             raise ToolError("Teammates can only send direct messages to team-lead")
         target_color = None
@@ -467,6 +474,14 @@ def task_update(
     """Update a task's fields. Setting owner auto-notifies the assignee via
     inbox. Setting status to 'deleted' removes the task file from disk.
     Metadata keys are merged into existing metadata (set a key to null to delete it)."""
+    if owner is not None:
+        try:
+            config = teams.read_config(team_name)
+        except FileNotFoundError:
+            raise ToolError(f"Team {team_name!r} not found")
+        member_names = {m.name for m in config.members}
+        if owner not in member_names:
+            raise ToolError(f"Owner {owner!r} is not a member of team {team_name!r}")
     try:
         task = tasks.update_task(
             team_name,
@@ -518,6 +533,13 @@ def read_inbox(
 ) -> list[dict]:
     """Read messages from an agent's inbox. Returns all messages by default.
     Set unread_only=True to get only unprocessed messages."""
+    try:
+        config = teams.read_config(team_name)
+    except FileNotFoundError:
+        raise ToolError(f"Team {team_name!r} not found")
+    member_names = {m.name for m in config.members}
+    if agent_name not in member_names:
+        raise ToolError(f"Agent {agent_name!r} is not a member of team {team_name!r}")
     msgs = messaging.read_inbox(
         team_name, agent_name, unread_only=unread_only, mark_as_read=mark_as_read
     )
@@ -590,7 +612,9 @@ def process_shutdown_approved(team_name: str, agent_name: str, ctx: Context) -> 
         raise ToolError("Cannot process shutdown for team-lead")
     oc_url = _get_lifespan(ctx).get("opencode_server_url")
     member = _find_teammate(team_name, agent_name)
-    if member and member.backend_type == "opencode" and member.opencode_session_id:
+    if member is None:
+        raise ToolError(f"Teammate {agent_name!r} not found in team {team_name!r}")
+    if member.backend_type == "opencode" and member.opencode_session_id:
         _cleanup_opencode_session(oc_url, member.opencode_session_id)
     teams.remove_member(team_name, agent_name)
     tasks.reset_owner_tasks(team_name, agent_name)
