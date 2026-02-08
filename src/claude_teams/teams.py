@@ -92,7 +92,10 @@ def create_team(
 
 def read_config(name: str, base_dir: Path | None = None) -> TeamConfig:
     config_path = _teams_dir(base_dir) / name / "config.json"
-    raw = json.loads(config_path.read_text())
+    try:
+        raw = json.loads(config_path.read_text())
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Team {name!r} not found")
     return TeamConfig.model_validate(raw)
 
 
