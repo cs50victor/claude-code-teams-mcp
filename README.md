@@ -31,7 +31,7 @@ Add to your project's `.mcp.json` (Claude Code):
 }
 ```
 
-Or add to `~/.config/opencode/config.json` (OpenCode):
+Or add to `~/.config/opencode/opencode.json` (OpenCode):
 
 ```json
 {
