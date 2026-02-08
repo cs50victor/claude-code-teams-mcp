@@ -14,6 +14,7 @@ from claude_teams.server import _build_spawn_description, mcp
 
 def _make_teammate(
     name: str, team_name: str, pane_id: str = "%1", backend_type: str = "claude",
+    opencode_session_id: str | None = None,
 ) -> TeammateMember:
     return TeammateMember(
         agent_id=f"{name}@{team_name}",
@@ -27,6 +28,7 @@ def _make_teammate(
         tmux_pane_id=pane_id,
         cwd="/tmp",
         backend_type=backend_type,
+        opencode_session_id=opencode_session_id,
     )
 
 
@@ -552,6 +554,7 @@ async def opencode_client(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
     monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setenv("OPENCODE_SERVER_URL", "http://localhost:4096")
     monkeypatch.setattr(
         "claude_teams.server.discover_harness_binary",
         lambda name: "/usr/bin/echo" if name in ("claude", "opencode") else None,
@@ -561,6 +564,12 @@ async def opencode_client(tmp_path: Path, monkeypatch):
         lambda binary: ["anthropic/claude-opus-4-6", "openai/gpt-5.2-codex"],
     )
     monkeypatch.setattr("claude_teams.spawner.subprocess.run", lambda *a, **kw: type("R", (), {"stdout": "%99\n"})())
+    monkeypatch.setattr("claude_teams.spawner.opencode_client.verify_mcp_configured", lambda url: None)
+    monkeypatch.setattr("claude_teams.spawner.opencode_client.create_session", lambda *a, **kw: "ses_mock")
+    monkeypatch.setattr("claude_teams.spawner.opencode_client.send_prompt_async", lambda *a, **kw: None)
+    monkeypatch.setattr("claude_teams.server.opencode_client.send_prompt_async", lambda *a, **kw: None)
+    monkeypatch.setattr("claude_teams.server.opencode_client.abort_session", lambda *a, **kw: None)
+    monkeypatch.setattr("claude_teams.server.opencode_client.delete_session", lambda *a, **kw: None)
     (tmp_path / "teams").mkdir()
     (tmp_path / "tasks").mkdir()
     async with Client(mcp) as c:
@@ -589,7 +598,10 @@ async def opencode_only_client(tmp_path: Path, monkeypatch):
 
 class TestBuildSpawnDescription:
     def test_both_backends_available(self) -> None:
-        desc = _build_spawn_description("/bin/claude", "/bin/opencode", ["model-a", "model-b"])
+        desc = _build_spawn_description(
+            "/bin/claude", "/bin/opencode", ["model-a", "model-b"],
+            opencode_server_url="http://localhost:4096",
+        )
         assert "'claude'" in desc
         assert "'opencode'" in desc
         assert "model-a" in desc
@@ -601,14 +613,25 @@ class TestBuildSpawnDescription:
         assert "'opencode'" not in desc
 
     def test_only_opencode_available(self) -> None:
-        desc = _build_spawn_description(None, "/bin/opencode", ["model-x"])
+        desc = _build_spawn_description(
+            None, "/bin/opencode", ["model-x"],
+            opencode_server_url="http://localhost:4096",
+        )
         assert "'claude'" not in desc
         assert "'opencode'" in desc
         assert "model-x" in desc
 
     def test_opencode_with_no_models(self) -> None:
-        desc = _build_spawn_description("/bin/claude", "/bin/opencode", [])
+        desc = _build_spawn_description(
+            "/bin/claude", "/bin/opencode", [],
+            opencode_server_url="http://localhost:4096",
+        )
         assert "none discovered" in desc
+
+    def test_opencode_hidden_when_server_url_missing(self) -> None:
+        desc = _build_spawn_description("/bin/claude", "/bin/opencode", ["model-a"])
+        assert "'opencode'" not in desc
+        assert "'claude'" in desc
 
 
 class TestSpawnBackendType:
@@ -660,9 +683,12 @@ class TestSpawnBackendType:
 
 
 class TestShutdownOpencodeTeammate:
-    async def test_shutdown_approved_includes_opencode_backend_type(self, opencode_client: Client):
+    async def test_shutdown_approved_includes_opencode_backend_type_and_session_id(self, opencode_client: Client):
         await opencode_client.call_tool("team_create", {"team_name": "tsd1"})
-        teams.add_member("tsd1", _make_teammate("oc-worker", "tsd1", pane_id="%55", backend_type="opencode"))
+        teams.add_member(
+            "tsd1",
+            _make_teammate("oc-worker", "tsd1", pane_id="%55", backend_type="opencode", opencode_session_id="ses_oc1"),
+        )
         await opencode_client.call_tool(
             "send_message",
             {
@@ -683,4 +709,5 @@ class TestShutdownOpencodeTeammate:
         assert payload["type"] == "shutdown_approved"
         assert payload["backendType"] == "opencode"
         assert payload["paneId"] == "%55"
+        assert payload["sessionId"] == "ses_oc1"
         assert payload["from"] == "oc-worker"

@@ -80,7 +80,7 @@ def create_team(
     )
 
     config_path = team_dir / "config.json"
-    config_path.write_text(json.dumps(config.model_dump(by_alias=True), indent=2))
+    config_path.write_text(json.dumps(config.model_dump(by_alias=True, exclude_none=True), indent=2))
 
     return TeamCreateResult(
         team_name=name,
@@ -97,7 +97,7 @@ def read_config(name: str, base_dir: Path | None = None) -> TeamConfig:
 
 def write_config(name: str, config: TeamConfig, base_dir: Path | None = None) -> None:
     config_dir = _teams_dir(base_dir) / name
-    data = json.dumps(config.model_dump(by_alias=True), indent=2)
+    data = json.dumps(config.model_dump(by_alias=True, exclude_none=True), indent=2)
 
     # NOTE(victor): atomic write to avoid partial reads from concurrent agents
     fd, tmp_path = tempfile.mkstemp(dir=config_dir, suffix=".tmp")

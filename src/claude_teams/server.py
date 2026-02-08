@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 import time
 import uuid
 from typing import Any, Literal
@@ -7,7 +9,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.lifespan import lifespan
 
-from claude_teams import messaging, tasks, teams
+from claude_teams import messaging, opencode_client, tasks, teams
 from claude_teams.models import (
     COLOR_PALETTE,
     InboxMessage,
@@ -16,12 +18,15 @@ from claude_teams.models import (
     SpawnResult,
     TeammateMember,
 )
+from claude_teams.opencode_client import OpenCodeAPIError
 from claude_teams.spawner import (
     discover_harness_binary,
     discover_opencode_models,
     kill_tmux_pane,
     spawn_teammate,
 )
+
+logger = logging.getLogger(__name__)
 
 
 _SPAWN_TOOL_BASE_DESCRIPTION = (
@@ -35,12 +40,13 @@ def _build_spawn_description(
     claude_binary: str | None,
     opencode_binary: str | None,
     opencode_models: list[str],
+    opencode_server_url: str | None = None,
 ) -> str:
     parts = [_SPAWN_TOOL_BASE_DESCRIPTION]
     backends = []
     if claude_binary:
         backends.append("'claude' (default, models: sonnet, opus, haiku)")
-    if opencode_binary:
+    if opencode_binary and opencode_server_url:
         model_list = ", ".join(opencode_models) if opencode_models else "none discovered"
         backends.append(f"'opencode' (models: {model_list})")
     if backends:
@@ -57,16 +63,19 @@ async def app_lifespan(server):
             "No coding agent binary found on PATH. "
             "Install Claude Code ('claude') or OpenCode ('opencode')."
         )
+    opencode_server_url = os.environ.get("OPENCODE_SERVER_URL")
     opencode_models: list[str] = []
     if opencode_binary:
         opencode_models = discover_opencode_models(opencode_binary)
-    # Patch spawn_teammate tool description with discovered models
     tool = await mcp.get_tool("spawn_teammate")
-    tool.description = _build_spawn_description(claude_binary, opencode_binary, opencode_models)
+    tool.description = _build_spawn_description(
+        claude_binary, opencode_binary, opencode_models, opencode_server_url,
+    )
     session_id = str(uuid.uuid4())
     yield {
         "claude_binary": claude_binary,
         "opencode_binary": opencode_binary,
+        "opencode_server_url": opencode_server_url,
         "session_id": session_id,
         "active_team": None,
     }
@@ -141,8 +150,9 @@ def spawn_teammate_tool(
             plan_mode_required=plan_mode_required,
             backend_type=backend_type,
             opencode_binary=ls["opencode_binary"],
+            opencode_server_url=ls["opencode_server_url"],
         )
-    except ValueError as e:
+    except (ValueError, OpenCodeAPIError) as e:
         raise ToolError(str(e))
     return SpawnResult(
         agent_id=member.agent_id,
@@ -151,10 +161,43 @@ def spawn_teammate_tool(
     ).model_dump()
 
 
+def _push_to_opencode_session(server_url: str, member: TeammateMember, text: str) -> None:
+    """Push a message into an opencode teammate's session via the HTTP API."""
+    if member.backend_type != "opencode" or not member.opencode_session_id or not server_url:
+        return
+    try:
+        opencode_client.send_prompt_async(server_url, member.opencode_session_id, text)
+    except OpenCodeAPIError:
+        logger.warning("Failed to push message to opencode session %s", member.opencode_session_id)
+
+
+def _cleanup_opencode_session(server_url: str | None, session_id: str | None) -> None:
+    """Abort and delete an opencode session. Best-effort, errors are logged."""
+    if not server_url or not session_id:
+        return
+    try:
+        opencode_client.abort_session(server_url, session_id)
+    except OpenCodeAPIError:
+        logger.warning("Failed to abort opencode session %s", session_id)
+    try:
+        opencode_client.delete_session(server_url, session_id)
+    except OpenCodeAPIError:
+        logger.warning("Failed to delete opencode session %s", session_id)
+
+
+def _find_teammate(team_name: str, name: str) -> TeammateMember | None:
+    config = teams.read_config(team_name)
+    for m in config.members:
+        if isinstance(m, TeammateMember) and m.name == name:
+            return m
+    return None
+
+
 @mcp.tool
 def send_message(
     team_name: str,
     type: Literal["message", "broadcast", "shutdown_request", "shutdown_response", "plan_approval_response"],
+    ctx: Context,
     recipient: str = "",
     content: str = "",
     summary: str = "",
@@ -168,6 +211,7 @@ def send_message(
     Type 'shutdown_request' asks a teammate to shut down (requires recipient; content used as reason).
     Type 'shutdown_response' responds to a shutdown request (requires sender, request_id, approve).
     Type 'plan_approval_response' responds to a plan approval request (requires recipient, request_id, approve)."""
+    oc_url = _get_lifespan(ctx).get("opencode_server_url")
 
     if type == "message":
         if not content:
@@ -181,13 +225,17 @@ def send_message(
         if recipient not in member_names:
             raise ToolError(f"Recipient {recipient!r} is not a member of team {team_name!r}")
         target_color = None
+        target_member = None
         for m in config.members:
             if m.name == recipient and isinstance(m, TeammateMember):
                 target_color = m.color
+                target_member = m
                 break
         messaging.send_plain_message(
             team_name, "team-lead", recipient, content, summary=summary, color=target_color,
         )
+        if target_member and oc_url:
+            _push_to_opencode_session(oc_url, target_member, content)
         return SendMessageResult(
             success=True,
             message=f"Message sent to {recipient}",
@@ -210,6 +258,8 @@ def send_message(
                 messaging.send_plain_message(
                     team_name, "team-lead", m.name, content, summary=summary, color=None,
                 )
+                if oc_url:
+                    _push_to_opencode_session(oc_url, m, content)
                 count += 1
         return SendMessageResult(
             success=True,
@@ -226,6 +276,12 @@ def send_message(
         if recipient not in member_names:
             raise ToolError(f"Recipient {recipient!r} is not a member of team {team_name!r}")
         req_id = messaging.send_shutdown_request(team_name, recipient, reason=content)
+        target_member = _find_teammate(team_name, recipient)
+        if target_member and oc_url:
+            _push_to_opencode_session(
+                oc_url, target_member,
+                f'{{"type":"shutdown_request","requestId":"{req_id}","reason":"{content}"}}',
+            )
         return SendMessageResult(
             success=True,
             message=f"Shutdown request sent to {recipient}",
@@ -243,12 +299,14 @@ def send_message(
                     break
             pane_id = member.tmux_pane_id if member else ""
             backend = member.backend_type if member else "claude"
+            oc_session = member.opencode_session_id if member else None
             payload = ShutdownApproved(
                 request_id=request_id,
                 from_=sender,
                 timestamp=messaging.now_iso(),
                 pane_id=pane_id,
                 backend_type=backend,
+                session_id=oc_session,
             )
             messaging.send_structured_message(team_name, sender, "team-lead", payload)
             return SendMessageResult(
@@ -386,20 +444,23 @@ def read_config(team_name: str) -> dict:
 
 
 @mcp.tool
-def force_kill_teammate(team_name: str, agent_name: str) -> dict:
+def force_kill_teammate(team_name: str, agent_name: str, ctx: Context) -> dict:
     """Forcibly kill a teammate's tmux pane. Use when graceful shutdown via
     send_message(type='shutdown_request') is not possible or not responding.
     Kills the tmux pane, removes member from config, and resets their tasks."""
+    oc_url = _get_lifespan(ctx).get("opencode_server_url")
     config = teams.read_config(team_name)
-    pane_id = None
+    member = None
     for m in config.members:
         if isinstance(m, TeammateMember) and m.name == agent_name:
-            pane_id = m.tmux_pane_id
+            member = m
             break
-    if pane_id is None:
+    if member is None:
         raise ToolError(f"Teammate {agent_name!r} not found in team {team_name!r}")
-    if pane_id:
-        kill_tmux_pane(pane_id)
+    if member.backend_type == "opencode" and member.opencode_session_id:
+        _cleanup_opencode_session(oc_url, member.opencode_session_id)
+    if member.tmux_pane_id:
+        kill_tmux_pane(member.tmux_pane_id)
     teams.remove_member(team_name, agent_name)
     tasks.reset_owner_tasks(team_name, agent_name)
     return {"success": True, "message": f"{agent_name} has been stopped."}
@@ -427,11 +488,15 @@ async def poll_inbox(
 
 
 @mcp.tool
-def process_shutdown_approved(team_name: str, agent_name: str) -> dict:
+def process_shutdown_approved(team_name: str, agent_name: str, ctx: Context) -> dict:
     """Process a teammate's shutdown by removing them from config and resetting
     their tasks. Call this after confirming shutdown_approved in the lead inbox."""
     if agent_name == "team-lead":
         raise ToolError("Cannot process shutdown for team-lead")
+    oc_url = _get_lifespan(ctx).get("opencode_server_url")
+    member = _find_teammate(team_name, agent_name)
+    if member and member.backend_type == "opencode" and member.opencode_session_id:
+        _cleanup_opencode_session(oc_url, member.opencode_session_id)
     teams.remove_member(team_name, agent_name)
     tasks.reset_owner_tasks(team_name, agent_name)
     return {"success": True, "message": f"{agent_name} removed from team."}

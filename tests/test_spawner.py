@@ -9,11 +9,12 @@ from claude_teams import teams, messaging
 from claude_teams.models import COLOR_PALETTE, TeammateMember
 from claude_teams.spawner import (
     assign_color,
-    build_opencode_spawn_command,
+    build_opencode_attach_command,
     build_spawn_command,
     discover_harness_binary,
     discover_opencode_models,
     kill_tmux_pane,
+    map_agent_type,
     spawn_teammate,
 )
 
@@ -172,53 +173,41 @@ class TestKillTmuxPane:
 
 
 
-class TestBuildOpencodeSpawnCommand:
-    def test_should_contain_opencode_run_with_format_and_model(self) -> None:
-        member = _make_member("researcher", model="anthropic/claude-sonnet-4-5-20250929")
-        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
+class TestMapAgentType:
+    def test_general_purpose_maps_to_build(self) -> None:
+        assert map_agent_type("general-purpose") == "build"
+
+    def test_explore_maps_to_explore(self) -> None:
+        assert map_agent_type("explore") == "explore"
+        assert map_agent_type("Explore") == "explore"
+
+    def test_plan_maps_to_plan(self) -> None:
+        assert map_agent_type("plan") == "plan"
+        assert map_agent_type("Plan") == "plan"
+
+    def test_unknown_defaults_to_build(self) -> None:
+        assert map_agent_type("custom-thing") == "build"
+
+
+class TestBuildOpencodeAttachCommand:
+    def test_should_contain_attach_with_session_and_dir(self) -> None:
+        cmd = build_opencode_attach_command(
+            "/usr/local/bin/opencode", "http://localhost:4096", "ses_abc", "/tmp/work"
+        )
         assert "/usr/local/bin/opencode" in cmd
-        assert "run" in cmd
-        assert "--format json" in cmd
-        assert "--model" in cmd
-        assert "anthropic/claude-sonnet-4-5-20250929" in cmd
-        assert "cd /tmp" in cmd
+        assert "attach" in cmd
+        assert "http://localhost:4096" in cmd
+        assert "-s" in cmd
+        assert "ses_abc" in cmd
+        assert "--dir" in cmd
+        assert "/tmp/work" in cmd
 
-    def test_should_wrap_prompt_with_team_context(self) -> None:
-        member = _make_member("researcher")
-        member.prompt = "Do research"
-        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
-        assert "team member" in cmd
-        assert "researcher" in cmd
-        assert TEAM in cmd
-        assert "poll_inbox" in cmd
-        assert "send_message" in cmd
-        assert "Do research" in cmd
-
-    def test_should_handle_special_characters_in_prompt(self) -> None:
-        member = _make_member("researcher")
-        member.prompt = "Use 'single quotes' and \"double quotes\" and $variables"
-        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
-        assert "/usr/local/bin/opencode" in cmd
-        assert "run" in cmd
-
-    def test_should_handle_special_characters_in_name(self) -> None:
-        member = _make_member("my-agent_01")
-        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
-        assert "my-agent_01" in cmd
-
-    def test_should_handle_prompt_with_curly_braces(self) -> None:
-        member = _make_member("researcher")
-        member.prompt = "Run {cmd} and parse {output}"
-        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
-        assert "Run {cmd}" in cmd
-        assert "{output}" in cmd
-
-    def test_should_handle_empty_prompt(self) -> None:
-        member = _make_member("researcher")
-        member.prompt = ""
-        cmd = build_opencode_spawn_command(member, "/usr/local/bin/opencode", TEAM)
-        assert "/usr/local/bin/opencode" in cmd
-        assert "run" in cmd
+    def test_should_not_contain_run_or_format(self) -> None:
+        cmd = build_opencode_attach_command(
+            "/usr/local/bin/opencode", "http://localhost:4096", "ses_1", "/tmp"
+        )
+        assert "run" not in cmd
+        assert "--format" not in cmd
 
 
 class TestSpawnTeammateBackendType:
@@ -227,6 +216,15 @@ class TestSpawnTeammateBackendType:
             spawn_teammate(
                 TEAM, "worker", "prompt", "/bin/echo", SESSION_ID,
                 base_dir=team_dir, backend_type="opencode", opencode_binary=None,
+            )
+
+    def test_should_reject_opencode_when_server_url_missing(self, team_dir: Path) -> None:
+        with pytest.raises(ValueError, match="OPENCODE_SERVER_URL"):
+            spawn_teammate(
+                TEAM, "worker", "prompt", "/bin/echo", SESSION_ID,
+                base_dir=team_dir, backend_type="opencode",
+                opencode_binary="/usr/local/bin/opencode",
+                opencode_server_url=None,
             )
 
     @patch("claude_teams.spawner.subprocess")
@@ -244,23 +242,78 @@ class TestSpawnTeammateBackendType:
         assert "CLAUDECODE=1" in cmd_str
         assert "--agent-id" in cmd_str
 
+    @patch("claude_teams.spawner.opencode_client")
     @patch("claude_teams.spawner.subprocess")
-    def test_should_use_opencode_command_for_opencode_backend(
-        self, mock_subprocess: MagicMock, team_dir: Path
+    def test_should_use_opencode_attach_for_opencode_backend(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
     ) -> None:
+        mock_oc.create_session.return_value = "ses_test123"
         mock_subprocess.run.return_value.stdout = "%42\n"
         member = spawn_teammate(
             TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
             base_dir=team_dir, backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
         )
         assert member.backend_type == "opencode"
+        assert member.opencode_session_id == "ses_test123"
         call_args = mock_subprocess.run.call_args[0][0]
         cmd_str = call_args[-1]
-        assert "/usr/local/bin/opencode" in cmd_str
-        assert "run" in cmd_str
-        assert "--format json" in cmd_str
+        assert "attach" in cmd_str
+        assert "ses_test123" in cmd_str
         assert "CLAUDECODE=1" not in cmd_str
+        assert "run" not in cmd_str
+
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_verify_mcp_before_spawn(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        mock_oc.create_session.return_value = "ses_1"
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        spawn_teammate(
+            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
+        )
+        mock_oc.verify_mcp_configured.assert_called_once_with("http://localhost:4096")
+
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_send_prompt_via_api(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        mock_oc.create_session.return_value = "ses_1"
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        spawn_teammate(
+            TEAM, "worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
+        )
+        mock_oc.send_prompt_async.assert_called_once()
+        call_kwargs = mock_oc.send_prompt_async.call_args
+        assert "Do stuff" in call_kwargs[0][2] or "Do stuff" in str(call_kwargs)
+
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_store_session_id_in_config(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        mock_oc.create_session.return_value = "ses_persisted"
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        spawn_teammate(
+            TEAM, "oc-worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
+            base_dir=team_dir, backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
+        )
+        config = teams.read_config(TEAM, base_dir=team_dir)
+        found = [m for m in config.members if isinstance(m, TeammateMember) and m.name == "oc-worker"]
+        assert len(found) == 1
+        assert found[0].backend_type == "opencode"
+        assert found[0].opencode_session_id == "ses_persisted"
 
     def test_should_reject_claude_when_binary_missing(self, team_dir: Path) -> None:
         with pytest.raises(ValueError, match="claude"):
@@ -270,21 +323,6 @@ class TestSpawnTeammateBackendType:
             )
 
     @patch("claude_teams.spawner.subprocess")
-    def test_should_persist_backend_type_to_config(
-        self, mock_subprocess: MagicMock, team_dir: Path
-    ) -> None:
-        mock_subprocess.run.return_value.stdout = "%42\n"
-        spawn_teammate(
-            TEAM, "oc-worker", "Do stuff", "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
-            opencode_binary="/usr/local/bin/opencode",
-        )
-        config = teams.read_config(TEAM, base_dir=team_dir)
-        found = [m for m in config.members if isinstance(m, TeammateMember) and m.name == "oc-worker"]
-        assert len(found) == 1
-        assert found[0].backend_type == "opencode"
-
-    @patch("claude_teams.spawner.subprocess")
     def test_should_write_raw_prompt_to_inbox_not_wrapped(
         self, mock_subprocess: MagicMock, team_dir: Path
     ) -> None:
@@ -292,13 +330,11 @@ class TestSpawnTeammateBackendType:
         raw_prompt = "Analyze the codebase"
         spawn_teammate(
             TEAM, "oc-reader", raw_prompt, "/usr/local/bin/claude", SESSION_ID,
-            base_dir=team_dir, backend_type="opencode",
-            opencode_binary="/usr/local/bin/opencode",
+            base_dir=team_dir, backend_type="claude",
         )
         msgs = messaging.read_inbox(TEAM, "oc-reader", base_dir=team_dir)
         assert len(msgs) == 1
         assert msgs[0].text == raw_prompt
-        assert "team member" not in msgs[0].text
 
 
 class TestDiscoverHarnessBinary:
