@@ -41,6 +41,15 @@ _lifespan_state: dict[str, Any] = {}
 _spawn_tool: Any = None
 
 
+_VALID_BACKENDS = frozenset(KNOWN_CLIENTS.values())
+
+
+def _parse_backends_env(raw: str) -> list[str]:
+    if not raw:
+        return []
+    return [b.strip() for b in raw.split(",") if b.strip() and b.strip() in _VALID_BACKENDS]
+
+
 _SPAWN_TOOL_BASE_DESCRIPTION = (
     "Spawn a new teammate in a tmux {target}. The teammate receives its initial "
     "prompt via inbox and begins working autonomously. Names must be unique "
@@ -106,11 +115,7 @@ async def app_lifespan(server):
                 "Failed to fetch opencode agents from %s", opencode_server_url
             )
 
-    backends_env = os.environ.get("CLAUDE_TEAMS_BACKENDS", "")
-    if backends_env:
-        enabled_backends = [b.strip() for b in backends_env.split(",") if b.strip()]
-    else:
-        enabled_backends = []
+    enabled_backends = _parse_backends_env(os.environ.get("CLAUDE_TEAMS_BACKENDS", ""))
 
     tool = await mcp.get_tool("spawn_teammate")
     _spawn_tool = tool

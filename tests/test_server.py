@@ -9,7 +9,7 @@ from fastmcp import Client
 
 from claude_teams import messaging, tasks, teams
 from claude_teams.models import TeammateMember
-from claude_teams.server import _build_spawn_description, mcp
+from claude_teams.server import _build_spawn_description, _parse_backends_env, mcp
 
 
 def _make_teammate(
@@ -1111,21 +1111,19 @@ class TestEnabledBackendsValidation:
 
 class TestEnabledBackendsEnvParsing:
     def test_should_parse_comma_separated_backends(self):
-        backends_env = "claude,opencode"
-        result = [b.strip() for b in backends_env.split(",") if b.strip()]
-        assert result == ["claude", "opencode"]
+        assert _parse_backends_env("claude,opencode") == ["claude", "opencode"]
 
     def test_should_handle_whitespace_in_backends(self):
-        backends_env = " claude , opencode "
-        result = [b.strip() for b in backends_env.split(",") if b.strip()]
-        assert result == ["claude", "opencode"]
+        assert _parse_backends_env(" claude , opencode ") == ["claude", "opencode"]
 
     def test_should_ignore_empty_segments(self):
-        backends_env = "claude,,opencode,"
-        result = [b.strip() for b in backends_env.split(",") if b.strip()]
-        assert result == ["claude", "opencode"]
+        assert _parse_backends_env("claude,,opencode,") == ["claude", "opencode"]
 
     def test_should_return_empty_for_blank_string(self):
-        backends_env = ""
-        result = [b.strip() for b in backends_env.split(",") if b.strip()]
-        assert result == []
+        assert _parse_backends_env("") == []
+
+    def test_should_filter_out_unknown_backends(self):
+        assert _parse_backends_env("claude,bogus,opencode") == ["claude", "opencode"]
+
+    def test_should_filter_all_unknown_backends(self):
+        assert _parse_backends_env("bogus,fake") == []
