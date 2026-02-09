@@ -11,8 +11,8 @@ from typing import Any, Literal
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.lifespan import lifespan
-from mcp.types import ToolAnnotations
 from fastmcp.server.middleware import Middleware
+from mcp.types import ToolAnnotations
 
 from claude_teams import messaging, opencode_client, tasks, teams
 from claude_teams.models import (
@@ -51,6 +51,8 @@ def _truncate_message(msg: dict, limit: int = _MESSAGE_TEXT_LIMIT) -> dict:
     if isinstance(text, str) and len(text) > limit:
         msg = {**msg, "text": text[:limit] + "… [truncated]"}
     return msg
+
+
 KNOWN_CLIENTS: dict[str, str] = {
     "claude-code": "claude",
     "claude": "claude",
@@ -76,7 +78,13 @@ _VALID_BACKENDS = frozenset(KNOWN_CLIENTS.values())
 def _parse_backends_env(raw: str) -> list[str]:
     if not raw:
         return []
-    return list(dict.fromkeys(b.strip() for b in raw.split(",") if b.strip() and b.strip() in _VALID_BACKENDS))
+    return list(
+        dict.fromkeys(
+            b.strip()
+            for b in raw.split(",")
+            if b.strip() and b.strip() in _VALID_BACKENDS
+        )
+    )
 
 
 _SPAWN_TOOL_BASE_DESCRIPTION = (
@@ -120,7 +128,7 @@ def _build_spawn_description(
     return " ".join(parts)
 
 
-def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
+def _update_spawn_tool(tool: Any, enabled: list[str], state: dict[str, Any]) -> None:
     tool.parameters["properties"]["backend_type"]["enum"] = list(enabled)
     if enabled:
         tool.parameters["properties"]["backend_type"]["default"] = enabled[0]
@@ -136,7 +144,6 @@ def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
 
 @lifespan
 async def app_lifespan(_server: Any) -> AsyncIterator[dict[str, Any]]:
-async def app_lifespan(server):
     global _spawn_tool
 
     claude_binary = discover_harness_binary("claude")
@@ -182,36 +189,44 @@ async def app_lifespan(server):
     _spawn_tool = tool
 
     if enabled_backends:
-        _update_spawn_tool(tool, enabled_backends, {
-            "claude_binary": claude_binary,
-            "opencode_binary": opencode_binary,
-            "opencode_models": opencode_models,
-            "opencode_server_url": opencode_server_url,
-            "opencode_agents": opencode_agents,
-        })
+        _update_spawn_tool(
+            tool,
+            enabled_backends,
+            {
+                "claude_binary": claude_binary,
+                "opencode_binary": opencode_binary,
+                "opencode_models": opencode_models,
+                "opencode_server_url": opencode_server_url,
+                "opencode_agents": opencode_agents,
+            },
+        )
     else:
         tool.description = _build_spawn_description(
-            claude_binary, opencode_binary, opencode_models,
-            opencode_server_url, opencode_agents,
+            claude_binary,
+            opencode_binary,
+            opencode_models,
+            opencode_server_url,
+            opencode_agents,
         )
 
     session_id = str(uuid.uuid4())
     _lifespan_state.clear()
-    _lifespan_state.update({
-        "claude_binary": claude_binary,
-        "opencode_binary": opencode_binary,
-        "opencode_server_url": opencode_server_url,
-        "opencode_agents": opencode_agents,
-        "opencode_models": opencode_models,
-        "enabled_backends": enabled_backends,
-        "session_id": session_id,
-        "active_team": None,
-        "orchestrator": None,
-        "tmux_target": tmux_target,
-    }
-        "client_name": "unknown",
-        "client_version": "unknown",
-    })
+    _lifespan_state.update(
+        {
+            "claude_binary": claude_binary,
+            "opencode_binary": opencode_binary,
+            "opencode_server_url": opencode_server_url,
+            "opencode_agents": opencode_agents,
+            "opencode_models": opencode_models,
+            "enabled_backends": enabled_backends,
+            "session_id": session_id,
+            "active_team": None,
+            "orchestrator": None,
+            "tmux_target": tmux_target,
+            "client_name": "unknown",
+            "client_version": "unknown",
+        }
+    )
     yield _lifespan_state
 
 
@@ -220,7 +235,7 @@ class HarnessDetectionMiddleware(Middleware):
     # RequestContext isn't established yet. Client info is accessible from tool
     # handlers via ctx.session.client_params.clientInfo (stored by the MCP SDK).
 
-    async def on_initialize(self, context, call_next):
+    async def on_initialize(self, context: Any, call_next: Any) -> Any:
         _unknown = SimpleNamespace(name="unknown", version="unknown")
         client_info = context.message.params.clientInfo or _unknown
         client_name = client_info.name
@@ -240,7 +255,9 @@ class HarnessDetectionMiddleware(Middleware):
         if not enabled:
             if _lifespan_state.get("claude_binary"):
                 enabled.append("claude")
-            if _lifespan_state.get("opencode_binary") and _lifespan_state.get("opencode_server_url"):
+            if _lifespan_state.get("opencode_binary") and _lifespan_state.get(
+                "opencode_server_url"
+            ):
                 enabled.append("opencode")
 
         _lifespan_state["enabled_backends"] = enabled
@@ -1137,8 +1154,9 @@ def spawn_subagent(
 
 
 def main() -> None:
-def main():
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
     mcp.run()
 
 

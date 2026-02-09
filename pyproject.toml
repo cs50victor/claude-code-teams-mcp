@@ -93,6 +93,7 @@ ignore = [
     "PLR0915", "PLR6301",
     "BLE001", "B017",
     "PLC0415", "N802", "N806",
+    "PLW0108",  # lambda in monkeypatch
     "RUF100",
 ]
 

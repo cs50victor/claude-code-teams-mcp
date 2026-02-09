@@ -578,7 +578,9 @@ class TestProcessShutdownGuard:
         assert result.is_error is False
         assert killed == ["%77"]
 
-    async def test_should_kill_tmux_window_on_shutdown(self, client: Client, monkeypatch):
+    async def test_should_kill_tmux_window_on_shutdown(
+        self, client: Client, monkeypatch
+    ):
         killed = []
         monkeypatch.setattr(
             "claude_teams.server.kill_tmux_pane", lambda pane_id: killed.append(pane_id)
@@ -944,7 +946,9 @@ class TestBuildSpawnDescription:
         )
         assert "opencode agents" not in desc.lower()
 
-    def test_should_hide_opencode_when_not_in_enabled_backends(self, monkeypatch) -> None:
+    def test_should_hide_opencode_when_not_in_enabled_backends(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
         desc = _build_spawn_description(
             "/bin/claude",
@@ -980,7 +984,9 @@ class TestBuildSpawnDescription:
         assert "'claude'" in desc
         assert "'opencode'" in desc
 
-    def test_should_hide_opencode_agents_when_opencode_not_enabled(self, monkeypatch) -> None:
+    def test_should_hide_opencode_agents_when_opencode_not_enabled(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
         agents = [{"name": "build", "description": "The default agent."}]
         desc = _build_spawn_description(
@@ -1171,9 +1177,7 @@ class TestOpencodeWithoutUrl:
     async def test_should_exclude_opencode_when_url_missing(
         self, opencode_env_no_url_client: Client
     ):
-        await opencode_env_no_url_client.call_tool(
-            "team_create", {"team_name": "tnou"}
-        )
+        await opencode_env_no_url_client.call_tool("team_create", {"team_name": "tnou"})
         result = await opencode_env_no_url_client.call_tool(
             "spawn_teammate",
             {
