@@ -57,7 +57,7 @@ _VALID_BACKENDS = frozenset(KNOWN_CLIENTS.values())
 def _parse_backends_env(raw: str) -> list[str]:
     if not raw:
         return []
-    return [b.strip() for b in raw.split(",") if b.strip() and b.strip() in _VALID_BACKENDS]
+    return list(dict.fromkeys(b.strip() for b in raw.split(",") if b.strip() and b.strip() in _VALID_BACKENDS))
 
 
 _SPAWN_TOOL_BASE_DESCRIPTION = (
