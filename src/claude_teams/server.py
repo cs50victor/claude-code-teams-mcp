@@ -31,6 +31,15 @@ from claude_teams.spawner import (
 
 logger = logging.getLogger(__name__)
 
+KNOWN_CLIENTS: dict[str, str] = {
+    "claude-code": "claude",
+    "claude": "claude",
+    "opencode": "opencode",
+}
+
+_lifespan_state: dict[str, Any] = {}
+_spawn_tool: Any = None
+
 
 _SPAWN_TOOL_BASE_DESCRIPTION = (
     "Spawn a new teammate in a tmux {target}. The teammate receives its initial "
@@ -45,20 +54,26 @@ def _build_spawn_description(
     opencode_models: list[str],
     opencode_server_url: str | None = None,
     opencode_agents: list[dict] | None = None,
+    enabled_backends: list[str] | None = None,
 ) -> str:
     tmux_target = "window" if use_tmux_windows() else "pane"
     parts = [_SPAWN_TOOL_BASE_DESCRIPTION.format(target=tmux_target)]
     backends = []
-    if claude_binary:
+    show_claude = claude_binary is not None
+    show_opencode = opencode_binary is not None and opencode_server_url is not None
+    if enabled_backends is not None:
+        show_claude = show_claude and "claude" in enabled_backends
+        show_opencode = show_opencode and "opencode" in enabled_backends
+    if show_claude:
         backends.append("'claude' (default, models: sonnet, opus, haiku)")
-    if opencode_binary and opencode_server_url:
+    if show_opencode:
         model_list = (
             ", ".join(opencode_models) if opencode_models else "none discovered"
         )
         backends.append(f"'opencode' (models: {model_list})")
     if backends:
         parts.append(f"Available backends: {'; '.join(backends)}.")
-    if opencode_agents:
+    if show_opencode and opencode_agents:
         agent_lines = [f"  - {a['name']}: {a['description']}" for a in opencode_agents]
         parts.append(
             "Available opencode agents (pass as subagent_type when backend_type='opencode'):\n"
@@ -69,6 +84,8 @@ def _build_spawn_description(
 
 @lifespan
 async def app_lifespan(server):
+    global _spawn_tool
+
     claude_binary = discover_harness_binary("claude")
     opencode_binary = discover_harness_binary("opencode")
     if not claude_binary and not opencode_binary:
@@ -88,25 +105,45 @@ async def app_lifespan(server):
             logger.warning(
                 "Failed to fetch opencode agents from %s", opencode_server_url
             )
+
+    backends_env = os.environ.get("CLAUDE_TEAMS_BACKENDS", "")
+    if backends_env:
+        enabled_backends = [b.strip() for b in backends_env.split(",") if b.strip()]
+    else:
+        enabled_backends = []
+
     tool = await mcp.get_tool("spawn_teammate")
-    tool.description = _build_spawn_description(
-        claude_binary,
-        opencode_binary,
-        opencode_models,
-        opencode_server_url,
-        opencode_agents,
-    )
+    _spawn_tool = tool
+
+    if enabled_backends:
+        tool.parameters["properties"]["backend_type"]["enum"] = list(enabled_backends)
+        tool.parameters["properties"]["backend_type"]["default"] = enabled_backends[0]
+        tool.description = _build_spawn_description(
+            claude_binary, opencode_binary, opencode_models,
+            opencode_server_url, opencode_agents,
+            enabled_backends=enabled_backends,
+        )
+    else:
+        tool.description = _build_spawn_description(
+            claude_binary, opencode_binary, opencode_models,
+            opencode_server_url, opencode_agents,
+        )
+
     session_id = str(uuid.uuid4())
-    yield {
+    _lifespan_state.clear()
+    _lifespan_state.update({
         "claude_binary": claude_binary,
         "opencode_binary": opencode_binary,
         "opencode_server_url": opencode_server_url,
         "opencode_agents": opencode_agents,
+        "opencode_models": opencode_models,
+        "enabled_backends": enabled_backends,
         "session_id": session_id,
         "active_team": None,
         "client_name": "unknown",
         "client_version": "unknown",
-    }
+    })
+    yield _lifespan_state
 
 
 class HarnessDetectionMiddleware(Middleware):
@@ -122,6 +159,35 @@ class HarnessDetectionMiddleware(Middleware):
         result = await call_next(context)
 
         logger.info("MCP client connected: %s v%s", client_name, client_version)
+
+        native_backend = KNOWN_CLIENTS.get(client_name)
+        enabled = _lifespan_state.get("enabled_backends", [])
+
+        if native_backend and native_backend not in enabled:
+            enabled.append(native_backend)
+
+        if not enabled:
+            if _lifespan_state.get("claude_binary"):
+                enabled.append("claude")
+            if _lifespan_state.get("opencode_binary"):
+                enabled.append("opencode")
+
+        _lifespan_state["enabled_backends"] = enabled
+        _lifespan_state["client_name"] = client_name
+        _lifespan_state["client_version"] = client_version
+
+        if _spawn_tool:
+            _spawn_tool.parameters["properties"]["backend_type"]["enum"] = list(enabled)
+            if enabled:
+                _spawn_tool.parameters["properties"]["backend_type"]["default"] = enabled[0]
+            _spawn_tool.description = _build_spawn_description(
+                _lifespan_state.get("claude_binary"),
+                _lifespan_state.get("opencode_binary"),
+                _lifespan_state.get("opencode_models", []),
+                _lifespan_state.get("opencode_server_url"),
+                _lifespan_state.get("opencode_agents"),
+                enabled_backends=enabled,
+            )
 
         return result
 
@@ -188,6 +254,9 @@ def spawn_teammate_tool(
     """Spawn a new teammate in tmux. Description is dynamically updated
     at startup with available backends and models."""
     ls = _get_lifespan(ctx)
+    enabled = ls.get("enabled_backends", [])
+    if enabled and backend_type not in enabled:
+        raise ToolError(f"Backend {backend_type!r} is not enabled. Enabled: {enabled}")
     opencode_agent = None
     if backend_type == "opencode":
         known = {a["name"] for a in ls.get("opencode_agents", [])}

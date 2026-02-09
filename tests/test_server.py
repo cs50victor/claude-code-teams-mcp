@@ -910,6 +910,56 @@ class TestBuildSpawnDescription:
         )
         assert "opencode agents" not in desc.lower()
 
+    def test_should_hide_opencode_when_not_in_enabled_backends(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            enabled_backends=["claude"],
+        )
+        assert "'claude'" in desc
+        assert "'opencode'" not in desc
+
+    def test_should_hide_claude_when_not_in_enabled_backends(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            enabled_backends=["opencode"],
+        )
+        assert "'claude'" not in desc
+        assert "'opencode'" in desc
+
+    def test_should_show_both_when_both_enabled(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            enabled_backends=["claude", "opencode"],
+        )
+        assert "'claude'" in desc
+        assert "'opencode'" in desc
+
+    def test_should_hide_opencode_agents_when_opencode_not_enabled(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        agents = [{"name": "build", "description": "The default agent."}]
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            opencode_agents=agents,
+            enabled_backends=["claude"],
+        )
+        assert "build" not in desc
+        assert "opencode agents" not in desc.lower()
+
 
 class TestSpawnBackendType:
     async def test_should_reject_opencode_when_binary_not_found(self, client: Client):
@@ -1002,3 +1052,80 @@ class TestShutdownOpencodeTeammate:
         assert payload["from"] == "oc-worker"
 
 
+@pytest.fixture
+async def claude_only_env_client(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(teams, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setenv("CLAUDE_TEAMS_BACKENDS", "claude")
+    monkeypatch.setattr(
+        "claude_teams.server.discover_harness_binary",
+        lambda name: "/usr/bin/echo" if name in ("claude", "opencode") else None,
+    )
+    monkeypatch.setattr(
+        "claude_teams.server.discover_opencode_models",
+        lambda binary: ["anthropic/claude-opus-4-6"],
+    )
+    (tmp_path / "teams").mkdir()
+    (tmp_path / "tasks").mkdir()
+    async with Client(mcp) as c:
+        yield c
+
+
+class TestEnabledBackendsValidation:
+    async def test_should_reject_disabled_backend_on_spawn(
+        self, claude_only_env_client: Client
+    ):
+        await claude_only_env_client.call_tool("team_create", {"team_name": "teb1"})
+        result = await claude_only_env_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "teb1",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "opencode",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not enabled" in result.content[0].text.lower()
+
+    async def test_should_accept_enabled_backend_on_spawn(
+        self, claude_only_env_client: Client
+    ):
+        await claude_only_env_client.call_tool("team_create", {"team_name": "teb2"})
+        result = await claude_only_env_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "teb2",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "claude",
+            },
+            raise_on_error=False,
+        )
+        if result.is_error:
+            assert "not enabled" not in result.content[0].text.lower()
+
+
+class TestEnabledBackendsEnvParsing:
+    def test_should_parse_comma_separated_backends(self):
+        backends_env = "claude,opencode"
+        result = [b.strip() for b in backends_env.split(",") if b.strip()]
+        assert result == ["claude", "opencode"]
+
+    def test_should_handle_whitespace_in_backends(self):
+        backends_env = " claude , opencode "
+        result = [b.strip() for b in backends_env.split(",") if b.strip()]
+        assert result == ["claude", "opencode"]
+
+    def test_should_ignore_empty_segments(self):
+        backends_env = "claude,,opencode,"
+        result = [b.strip() for b in backends_env.split(",") if b.strip()]
+        assert result == ["claude", "opencode"]
+
+    def test_should_return_empty_for_blank_string(self):
+        backends_env = ""
+        result = [b.strip() for b in backends_env.split(",") if b.strip()]
+        assert result == []

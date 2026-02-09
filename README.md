@@ -60,6 +60,67 @@ Or add to `~/.config/opencode/opencode.json` (OpenCode):
   - `OPENCODE_SERVER_URL` must be set (for example, `http://localhost:4096`)
   - the `claude-teams` MCP server must be connected in that OpenCode instance
 
+## Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLAUDE_TEAMS_BACKENDS` | Comma-separated list of enabled backends (`claude`, `opencode`) | Auto-detect from connecting client |
+| `OPENCODE_SERVER_URL` | OpenCode HTTP API URL (required for opencode teammates) | *(unset)* |
+| `USE_TMUX_WINDOWS` | When set, spawn teammates in tmux windows instead of panes | *(unset)* |
+
+### Backend visibility
+
+When `CLAUDE_TEAMS_BACKENDS` is **not set**, the server auto-detects the connecting client and enables only its native backend. A Claude Code client sees only `claude`; an OpenCode client sees only `opencode`. Unknown clients fall back to all discovered backends.
+
+When `CLAUDE_TEAMS_BACKENDS` **is set**, the listed backends are enabled. The connecting client's native backend is always added automatically.
+
+Examples:
+
+Claude Code user, only claude teammates (default, no env var needed):
+```json
+{
+  "mcpServers": {
+    "claude-teams": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"]
+    }
+  }
+}
+```
+
+Claude Code user, both backends:
+```json
+{
+  "mcpServers": {
+    "claude-teams": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"],
+      "env": {
+        "CLAUDE_TEAMS_BACKENDS": "claude,opencode",
+        "OPENCODE_SERVER_URL": "http://localhost:4096"
+      }
+    }
+  }
+}
+```
+
+OpenCode user, both backends:
+```json
+{
+  "mcp": {
+    "claude-teams": {
+      "type": "local",
+      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"],
+      "env": {
+        "CLAUDE_TEAMS_BACKENDS": "claude,opencode",
+        "OPENCODE_SERVER_URL": "http://localhost:4096"
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
 ## Tools
 
 | Tool | Description |
