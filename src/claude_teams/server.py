@@ -645,6 +645,7 @@ def process_shutdown_approved(team_name: str, agent_name: str, ctx: Context) -> 
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     mcp.run()
 
 

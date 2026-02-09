@@ -14,3 +14,4 @@ venv/
 *.so
 .DS_Store
 .mcp.json
+.opencode/opencode.json

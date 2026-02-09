@@ -29,7 +29,7 @@ Add to your project's `.mcp.json` (Claude Code):
   "mcpServers": {
     "claude-teams": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp", "claude-teams"]
+      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"]
     }
   }
 }
@@ -42,7 +42,7 @@ Or add to `~/.config/opencode/opencode.json` (OpenCode):
   "mcp": {
     "claude-teams": {
       "type": "local",
-      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp", "claude-teams"],
+      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"],
       "enabled": true
     }
   }
