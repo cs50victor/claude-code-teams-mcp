@@ -731,6 +731,8 @@ def process_shutdown_approved(team_name: str, agent_name: str, ctx: Context) -> 
         raise ToolError(f"Teammate {agent_name!r} not found in team {team_name!r}")
     if member.backend_type == "opencode" and member.opencode_session_id:
         _cleanup_opencode_session(oc_url, member.opencode_session_id)
+    if member.tmux_pane_id:
+        kill_tmux_pane(member.tmux_pane_id)
     teams.remove_member(team_name, agent_name)
     tasks.reset_owner_tasks(team_name, agent_name)
     return {"success": True, "message": f"{agent_name} removed from team."}

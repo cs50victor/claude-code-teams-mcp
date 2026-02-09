@@ -558,6 +558,34 @@ class TestProcessShutdownGuard:
         assert result.is_error is True
         assert "ghost" in result.content[0].text
 
+    async def test_should_kill_tmux_pane_on_shutdown(self, client: Client, monkeypatch):
+        killed = []
+        monkeypatch.setattr(
+            "claude_teams.server.kill_tmux_pane", lambda pane_id: killed.append(pane_id)
+        )
+        await client.call_tool("team_create", {"team_name": "tsg3"})
+        teams.add_member("tsg3", _make_teammate("worker", "tsg3", pane_id="%77"))
+        result = await client.call_tool(
+            "process_shutdown_approved",
+            {"team_name": "tsg3", "agent_name": "worker"},
+        )
+        assert result.is_error is False
+        assert killed == ["%77"]
+
+    async def test_should_kill_tmux_window_on_shutdown(self, client: Client, monkeypatch):
+        killed = []
+        monkeypatch.setattr(
+            "claude_teams.server.kill_tmux_pane", lambda pane_id: killed.append(pane_id)
+        )
+        await client.call_tool("team_create", {"team_name": "tsg4"})
+        teams.add_member("tsg4", _make_teammate("worker", "tsg4", pane_id="@12"))
+        result = await client.call_tool(
+            "process_shutdown_approved",
+            {"team_name": "tsg4", "agent_name": "worker"},
+        )
+        assert result.is_error is False
+        assert killed == ["@12"]
+
 
 class TestErrorWrapping:
     async def test_read_config_wraps_file_not_found(self, client: Client):
