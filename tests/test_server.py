@@ -9,7 +9,7 @@ from fastmcp import Client
 
 from claude_teams import messaging, tasks, teams
 from claude_teams.models import TeammateMember
-from claude_teams.server import _build_spawn_description, mcp
+from claude_teams.server import _build_spawn_description, _parse_backends_env, mcp
 
 
 def _make_teammate(
@@ -564,6 +564,34 @@ class TestProcessShutdownGuard:
         assert result.is_error is True
         assert "ghost" in result.content[0].text
 
+    async def test_should_kill_tmux_pane_on_shutdown(self, client: Client, monkeypatch):
+        killed = []
+        monkeypatch.setattr(
+            "claude_teams.server.kill_tmux_pane", lambda pane_id: killed.append(pane_id)
+        )
+        await client.call_tool("team_create", {"team_name": "tsg3"})
+        teams.add_member("tsg3", _make_teammate("worker", "tsg3", pane_id="%77"))
+        result = await client.call_tool(
+            "process_shutdown_approved",
+            {"team_name": "tsg3", "agent_name": "worker"},
+        )
+        assert result.is_error is False
+        assert killed == ["%77"]
+
+    async def test_should_kill_tmux_window_on_shutdown(self, client: Client, monkeypatch):
+        killed = []
+        monkeypatch.setattr(
+            "claude_teams.server.kill_tmux_pane", lambda pane_id: killed.append(pane_id)
+        )
+        await client.call_tool("team_create", {"team_name": "tsg4"})
+        teams.add_member("tsg4", _make_teammate("worker", "tsg4", pane_id="@12"))
+        result = await client.call_tool(
+            "process_shutdown_approved",
+            {"team_name": "tsg4", "agent_name": "worker"},
+        )
+        assert result.is_error is False
+        assert killed == ["@12"]
+
 
 class TestErrorWrapping:
     async def test_read_config_wraps_file_not_found(self, client: Client):
@@ -916,6 +944,56 @@ class TestBuildSpawnDescription:
         )
         assert "opencode agents" not in desc.lower()
 
+    def test_should_hide_opencode_when_not_in_enabled_backends(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            enabled_backends=["claude"],
+        )
+        assert "'claude'" in desc
+        assert "'opencode'" not in desc
+
+    def test_should_hide_claude_when_not_in_enabled_backends(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            enabled_backends=["opencode"],
+        )
+        assert "'claude'" not in desc
+        assert "'opencode'" in desc
+
+    def test_should_show_both_when_both_enabled(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            enabled_backends=["claude", "opencode"],
+        )
+        assert "'claude'" in desc
+        assert "'opencode'" in desc
+
+    def test_should_hide_opencode_agents_when_opencode_not_enabled(self, monkeypatch) -> None:
+        monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
+        agents = [{"name": "build", "description": "The default agent."}]
+        desc = _build_spawn_description(
+            "/bin/claude",
+            "/bin/opencode",
+            ["model-a"],
+            opencode_server_url="http://localhost:4096",
+            opencode_agents=agents,
+            enabled_backends=["claude"],
+        )
+        assert "build" not in desc
+        assert "opencode agents" not in desc.lower()
+
 
 class TestSpawnBackendType:
     async def test_should_reject_opencode_when_binary_not_found(self, client: Client):
@@ -1006,3 +1084,125 @@ class TestShutdownOpencodeTeammate:
         assert payload["paneId"] == "%55"
         assert payload["sessionId"] == "ses_oc1"
         assert payload["from"] == "oc-worker"
+
+
+@pytest.fixture
+async def claude_only_env_client(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(teams, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setenv("CLAUDE_TEAMS_BACKENDS", "claude")
+    monkeypatch.setattr(
+        "claude_teams.server.discover_harness_binary",
+        lambda name: "/usr/bin/echo" if name in ("claude", "opencode") else None,
+    )
+    monkeypatch.setattr(
+        "claude_teams.server.discover_opencode_models",
+        lambda binary: ["anthropic/claude-opus-4-6"],
+    )
+    monkeypatch.setattr(
+        "claude_teams.spawner.subprocess.run",
+        lambda *a, **kw: type("R", (), {"stdout": "%99\n"})(),
+    )
+    (tmp_path / "teams").mkdir()
+    (tmp_path / "tasks").mkdir()
+    async with Client(mcp) as c:
+        yield c
+
+
+class TestEnabledBackendsValidation:
+    async def test_should_reject_disabled_backend_on_spawn(
+        self, claude_only_env_client: Client
+    ):
+        await claude_only_env_client.call_tool("team_create", {"team_name": "teb1"})
+        result = await claude_only_env_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "teb1",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "opencode",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not enabled" in result.content[0].text.lower()
+
+    async def test_should_accept_enabled_backend_on_spawn(
+        self, claude_only_env_client: Client
+    ):
+        await claude_only_env_client.call_tool("team_create", {"team_name": "teb2"})
+        result = await claude_only_env_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "teb2",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "claude",
+            },
+        )
+        assert result.is_error is False
+
+
+@pytest.fixture
+async def opencode_env_no_url_client(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(teams, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setenv("CLAUDE_TEAMS_BACKENDS", "claude,opencode")
+    monkeypatch.delenv("OPENCODE_SERVER_URL", raising=False)
+    monkeypatch.setattr(
+        "claude_teams.server.discover_harness_binary",
+        lambda name: "/usr/bin/echo" if name in ("claude", "opencode") else None,
+    )
+    monkeypatch.setattr(
+        "claude_teams.server.discover_opencode_models",
+        lambda binary: ["anthropic/claude-opus-4-6"],
+    )
+    (tmp_path / "teams").mkdir()
+    (tmp_path / "tasks").mkdir()
+    async with Client(mcp) as c:
+        yield c
+
+
+class TestOpencodeWithoutUrl:
+    async def test_should_exclude_opencode_when_url_missing(
+        self, opencode_env_no_url_client: Client
+    ):
+        await opencode_env_no_url_client.call_tool(
+            "team_create", {"team_name": "tnou"}
+        )
+        result = await opencode_env_no_url_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "tnou",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "opencode",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not enabled" in result.content[0].text.lower()
+
+
+class TestEnabledBackendsEnvParsing:
+    def test_should_parse_comma_separated_backends(self):
+        assert _parse_backends_env("claude,opencode") == ["claude", "opencode"]
+
+    def test_should_handle_whitespace_in_backends(self):
+        assert _parse_backends_env(" claude , opencode ") == ["claude", "opencode"]
+
+    def test_should_ignore_empty_segments(self):
+        assert _parse_backends_env("claude,,opencode,") == ["claude", "opencode"]
+
+    def test_should_return_empty_for_blank_string(self):
+        assert _parse_backends_env("") == []
+
+    def test_should_filter_out_unknown_backends(self):
+        assert _parse_backends_env("claude,bogus,opencode") == ["claude", "opencode"]
+
+    def test_should_filter_all_unknown_backends(self):
+        assert _parse_backends_env("bogus,fake") == []

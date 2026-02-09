@@ -36,3 +36,4 @@ Thumbs.db
 # Project-specific
 .mcp.json
 .specstory/
+.opencode/opencode.json
