@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from collections import deque
 from pathlib import Path
-from typing import Any
 
 from claude_teams._filelock import file_lock
 from claude_teams.models import TaskFile
@@ -21,7 +20,9 @@ _STATUS_ORDER = {"pending": 0, "in_progress": 1, "completed": 2}
 
 def _flush_pending_writes(pending_writes: dict[Path, TaskFile]) -> None:
     for path, task_obj in pending_writes.items():
-        path.write_text(json.dumps(task_obj.model_dump(by_alias=True, exclude_none=True)))
+        path.write_text(
+            json.dumps(task_obj.model_dump(by_alias=True, exclude_none=True))
+        )
 
 
 def _would_create_cycle(
@@ -92,9 +93,7 @@ def create_task(
     return task
 
 
-def get_task(
-    team_name: str, task_id: str, base_dir: Path | None = None
-) -> TaskFile:
+def get_task(team_name: str, task_id: str, base_dir: Path | None = None) -> TaskFile:
     team_dir = _tasks_dir(base_dir) / team_name
     fpath = team_dir / f"{task_id}.json"
     raw = json.loads(fpath.read_text())
@@ -230,7 +229,7 @@ def update_task(
                     current.pop(k, None)
                 else:
                     current[k] = v
-            task.metadata = current if current else None
+            task.metadata = current or None
 
         if status is not None and status != "deleted":
             task.status = status
@@ -286,9 +285,7 @@ def update_task(
     return task
 
 
-def list_tasks(
-    team_name: str, base_dir: Path | None = None
-) -> list[TaskFile]:
+def list_tasks(team_name: str, base_dir: Path | None = None) -> list[TaskFile]:
     if not team_exists(team_name, base_dir):
         raise ValueError(f"Team {team_name!r} does not exist")
     team_dir = _tasks_dir(base_dir) / team_name

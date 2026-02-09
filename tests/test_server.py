@@ -114,7 +114,7 @@ class TestDeletedTaskGuard:
             await client.call_tool(
                 "read_inbox", {"team_name": "t2", "agent_name": "worker"}
             )
-        )
+        )["messages"]
         assert inbox == []
 
     async def test_should_send_assignment_when_owner_set_on_live_task(
@@ -136,7 +136,7 @@ class TestDeletedTaskGuard:
             await client.call_tool(
                 "read_inbox", {"team_name": "t2b", "agent_name": "worker"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         payload = json.loads(inbox[0]["text"])
         assert payload["type"] == "task_assignment"
@@ -163,7 +163,7 @@ class TestShutdownResponseSender:
             await client.call_tool(
                 "read_inbox", {"team_name": "t3", "agent_name": "team-lead"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         payload = json.loads(inbox[0]["text"])
         assert payload["type"] == "shutdown_approved"
@@ -189,7 +189,7 @@ class TestShutdownResponseSender:
             await client.call_tool(
                 "read_inbox", {"team_name": "t3b", "agent_name": "team-lead"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         assert inbox[0]["from"] == "rebel"
         assert inbox[0]["text"] == "still busy"
@@ -233,7 +233,7 @@ class TestPlanApprovalSender:
             await client.call_tool(
                 "read_inbox", {"team_name": "t_plan", "agent_name": "dev"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         assert inbox[0]["from"] == "team-lead"
         payload = json.loads(inbox[0]["text"])
@@ -258,7 +258,7 @@ class TestPlanApprovalSender:
             await client.call_tool(
                 "read_inbox", {"team_name": "t_plan2", "agent_name": "dev2"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         assert inbox[0]["from"] == "team-lead"
         assert inbox[0]["text"] == "needs error handling"
@@ -275,7 +275,9 @@ class TestWiring:
             "task_create",
             {"team_name": "t4", "subject": "second", "description": "d2"},
         )
-        result = _data(await client.call_tool("task_list", {"team_name": "t4"}))
+        result = _data(await client.call_tool("task_list", {"team_name": "t4"}))[
+            "tasks"
+        ]
         assert len(result) == 2
         assert result[0]["subject"] == "first"
         assert result[1]["subject"] == "second"
@@ -297,7 +299,7 @@ class TestWiring:
             await client.call_tool(
                 "read_inbox", {"team_name": "t5", "agent_name": "bob"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         assert inbox[0]["text"] == "hello bob"
         assert inbox[0]["from"] == "team-lead"
@@ -324,7 +326,7 @@ class TestWiring:
             await client.call_tool(
                 "read_inbox", {"team_name": "t5b", "agent_name": "team-lead"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         assert inbox[0]["from"] == "worker"
         assert inbox[0]["text"] == "done"
@@ -457,7 +459,7 @@ class TestSendMessageValidation:
         assert result.is_error is True
         assert "ghost" in result.content[0].text
 
-    async def test_should_reject_teammate_to_teammate_message(self, client: Client):
+    async def test_should_allow_teammate_to_teammate_message(self, client: Client):
         await client.call_tool("team_create", {"team_name": "tv9"})
         teams.add_member("tv9", _make_teammate("alice", "tv9"))
         teams.add_member("tv9", _make_teammate("bob", "tv9"))
@@ -473,8 +475,10 @@ class TestSendMessageValidation:
             },
             raise_on_error=False,
         )
-        assert result.is_error is True
-        assert "team-lead" in result.content[0].text
+        assert result.is_error is False
+        data = json.loads(result.content[0].text)
+        assert data["routing"]["sender"] == "alice"
+        assert data["routing"]["target"] == "bob"
 
     async def test_should_reject_self_message(self, client: Client):
         await client.call_tool("team_create", {"team_name": "tv_self"})
@@ -519,9 +523,10 @@ class TestSendMessageValidation:
         assert result.is_error is True
         assert "ghost" in result.content[0].text
 
-    async def test_should_reject_non_lead_broadcast(self, client: Client):
+    async def test_should_allow_non_lead_broadcast(self, client: Client):
         await client.call_tool("team_create", {"team_name": "tv10"})
         teams.add_member("tv10", _make_teammate("alice", "tv10"))
+        teams.add_member("tv10", _make_teammate("bob", "tv10"))
         result = await client.call_tool(
             "send_message",
             {
@@ -533,8 +538,9 @@ class TestSendMessageValidation:
             },
             raise_on_error=False,
         )
-        assert result.is_error is True
-        assert "team-lead" in result.content[0].text.lower()
+        assert result.is_error is False
+        data = json.loads(result.content[0].text)
+        assert data["success"] is True
 
 
 class TestProcessShutdownGuard:
@@ -992,7 +998,7 @@ class TestShutdownOpencodeTeammate:
             await opencode_client.call_tool(
                 "read_inbox", {"team_name": "tsd1", "agent_name": "team-lead"}
             )
-        )
+        )["messages"]
         assert len(inbox) == 1
         payload = json.loads(inbox[0]["text"])
         assert payload["type"] == "shutdown_approved"

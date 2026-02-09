@@ -1,16 +1,38 @@
+# Python bytecode / packaging
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
+*.egg
+*.so
 dist/
 build/
 .eggs/
-*.egg
+
+# Virtual environments
 .venv/
 venv/
+.env/
+
+# Tool caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.so
+.coverage
+htmlcov/
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.cursorindexingignore
+
+# Project-specific
 .mcp.json
+.specstory/

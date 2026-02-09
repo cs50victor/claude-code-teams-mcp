@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from claude_teams import teams, messaging
+from claude_teams import messaging, teams
 from claude_teams.models import COLOR_PALETTE, TeammateMember
 from claude_teams.spawner import (
     assign_color,
@@ -16,7 +16,6 @@ from claude_teams.spawner import (
     kill_tmux_pane,
     spawn_teammate,
 )
-
 
 TEAM = "test-team"
 SESSION_ID = "test-session-id"
@@ -79,7 +78,7 @@ class TestBuildSpawnCommand:
         assert "--parent-session-id" in cmd
         assert "--agent-type" in cmd
         assert "--model" in cmd
-        assert f"cd /tmp" in cmd
+        assert "cd /tmp" in cmd
         assert "--plan-mode-required" not in cmd
 
     def test_with_plan_mode(self) -> None:

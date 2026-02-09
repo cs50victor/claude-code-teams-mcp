@@ -3,16 +3,9 @@ from __future__ import annotations
 import json
 import re
 import threading
-from pathlib import Path
 
 import pytest
 
-from claude_teams.models import (
-    InboxMessage,
-    ShutdownRequest,
-    TaskAssignment,
-    TaskFile,
-)
 from claude_teams.messaging import (
     append_message,
     ensure_inbox,
@@ -23,6 +16,11 @@ from claude_teams.messaging import (
     send_shutdown_request,
     send_structured_message,
     send_task_assignment,
+)
+from claude_teams.models import (
+    InboxMessage,
+    TaskAssignment,
+    TaskFile,
 )
 
 
@@ -49,28 +47,44 @@ def test_ensure_inbox_idempotent(tmp_claude_dir):
 
 
 def test_append_message_accumulates(tmp_claude_dir):
-    msg1 = InboxMessage(from_="lead", text="hello", timestamp=now_iso(), read=False, summary="hi")
-    msg2 = InboxMessage(from_="lead", text="world", timestamp=now_iso(), read=False, summary="yo")
+    msg1 = InboxMessage(
+        from_="lead", text="hello", timestamp=now_iso(), read=False, summary="hi"
+    )
+    msg2 = InboxMessage(
+        from_="lead", text="world", timestamp=now_iso(), read=False, summary="yo"
+    )
     append_message("test-team", "bob", msg1, base_dir=tmp_claude_dir)
     append_message("test-team", "bob", msg2, base_dir=tmp_claude_dir)
-    raw = json.loads(inbox_path("test-team", "bob", base_dir=tmp_claude_dir).read_text())
+    raw = json.loads(
+        inbox_path("test-team", "bob", base_dir=tmp_claude_dir).read_text()
+    )
     assert len(raw) == 2
 
 
 def test_append_message_does_not_overwrite(tmp_claude_dir):
-    msg1 = InboxMessage(from_="lead", text="first", timestamp=now_iso(), read=False, summary="1")
-    msg2 = InboxMessage(from_="lead", text="second", timestamp=now_iso(), read=False, summary="2")
+    msg1 = InboxMessage(
+        from_="lead", text="first", timestamp=now_iso(), read=False, summary="1"
+    )
+    msg2 = InboxMessage(
+        from_="lead", text="second", timestamp=now_iso(), read=False, summary="2"
+    )
     append_message("test-team", "bob", msg1, base_dir=tmp_claude_dir)
     append_message("test-team", "bob", msg2, base_dir=tmp_claude_dir)
-    raw = json.loads(inbox_path("test-team", "bob", base_dir=tmp_claude_dir).read_text())
+    raw = json.loads(
+        inbox_path("test-team", "bob", base_dir=tmp_claude_dir).read_text()
+    )
     texts = [m["text"] for m in raw]
     assert "first" in texts
     assert "second" in texts
 
 
 def test_read_inbox_returns_all_by_default(tmp_claude_dir):
-    msg1 = InboxMessage(from_="lead", text="a", timestamp=now_iso(), read=False, summary="s1")
-    msg2 = InboxMessage(from_="lead", text="b", timestamp=now_iso(), read=True, summary="s2")
+    msg1 = InboxMessage(
+        from_="lead", text="a", timestamp=now_iso(), read=False, summary="s1"
+    )
+    msg2 = InboxMessage(
+        from_="lead", text="b", timestamp=now_iso(), read=True, summary="s2"
+    )
     append_message("test-team", "carol", msg1, base_dir=tmp_claude_dir)
     append_message("test-team", "carol", msg2, base_dir=tmp_claude_dir)
     msgs = read_inbox("test-team", "carol", mark_as_read=False, base_dir=tmp_claude_dir)
@@ -78,20 +92,38 @@ def test_read_inbox_returns_all_by_default(tmp_claude_dir):
 
 
 def test_read_inbox_unread_only(tmp_claude_dir):
-    msg1 = InboxMessage(from_="lead", text="a", timestamp=now_iso(), read=True, summary="s1")
-    msg2 = InboxMessage(from_="lead", text="b", timestamp=now_iso(), read=False, summary="s2")
+    msg1 = InboxMessage(
+        from_="lead", text="a", timestamp=now_iso(), read=True, summary="s1"
+    )
+    msg2 = InboxMessage(
+        from_="lead", text="b", timestamp=now_iso(), read=False, summary="s2"
+    )
     append_message("test-team", "dave", msg1, base_dir=tmp_claude_dir)
     append_message("test-team", "dave", msg2, base_dir=tmp_claude_dir)
-    msgs = read_inbox("test-team", "dave", unread_only=True, mark_as_read=False, base_dir=tmp_claude_dir)
+    msgs = read_inbox(
+        "test-team",
+        "dave",
+        unread_only=True,
+        mark_as_read=False,
+        base_dir=tmp_claude_dir,
+    )
     assert len(msgs) == 1
     assert msgs[0].text == "b"
 
 
 def test_read_inbox_marks_as_read(tmp_claude_dir):
-    msg = InboxMessage(from_="lead", text="unread", timestamp=now_iso(), read=False, summary="s")
+    msg = InboxMessage(
+        from_="lead", text="unread", timestamp=now_iso(), read=False, summary="s"
+    )
     append_message("test-team", "eve", msg, base_dir=tmp_claude_dir)
     read_inbox("test-team", "eve", mark_as_read=True, base_dir=tmp_claude_dir)
-    remaining = read_inbox("test-team", "eve", unread_only=True, mark_as_read=False, base_dir=tmp_claude_dir)
+    remaining = read_inbox(
+        "test-team",
+        "eve",
+        unread_only=True,
+        mark_as_read=False,
+        base_dir=tmp_claude_dir,
+    )
     assert len(remaining) == 0
 
 
@@ -101,7 +133,14 @@ def test_read_inbox_nonexistent_returns_empty(tmp_claude_dir):
 
 
 def test_send_plain_message_appears_in_inbox(tmp_claude_dir):
-    send_plain_message("test-team", "lead", "frank", "hey there", summary="greeting", base_dir=tmp_claude_dir)
+    send_plain_message(
+        "test-team",
+        "lead",
+        "frank",
+        "hey there",
+        summary="greeting",
+        base_dir=tmp_claude_dir,
+    )
     msgs = read_inbox("test-team", "frank", mark_as_read=False, base_dir=tmp_claude_dir)
     assert len(msgs) == 1
     assert msgs[0].from_ == "lead"
@@ -111,7 +150,15 @@ def test_send_plain_message_appears_in_inbox(tmp_claude_dir):
 
 
 def test_send_plain_message_with_color(tmp_claude_dir):
-    send_plain_message("test-team", "lead", "gina", "colorful", summary="c", color="blue", base_dir=tmp_claude_dir)
+    send_plain_message(
+        "test-team",
+        "lead",
+        "gina",
+        "colorful",
+        summary="c",
+        color="blue",
+        base_dir=tmp_claude_dir,
+    )
     msgs = read_inbox("test-team", "gina", mark_as_read=False, base_dir=tmp_claude_dir)
     assert msgs[0].color == "blue"
 
@@ -124,7 +171,9 @@ def test_send_structured_message_serializes_json_in_text(tmp_claude_dir):
         assigned_by="lead",
         timestamp=now_iso(),
     )
-    send_structured_message("test-team", "lead", "hank", payload, base_dir=tmp_claude_dir)
+    send_structured_message(
+        "test-team", "lead", "hank", payload, base_dir=tmp_claude_dir
+    )
     msgs = read_inbox("test-team", "hank", mark_as_read=False, base_dir=tmp_claude_dir)
     assert len(msgs) == 1
     parsed = json.loads(msgs[0].text)
@@ -167,7 +216,9 @@ def test_send_shutdown_request_with_reason(tmp_claude_dir):
 def test_should_not_lose_message_appended_during_mark_as_read(tmp_claude_dir):
     from filelock import FileLock
 
-    msg_a = InboxMessage(from_="lead", text="A", timestamp=now_iso(), read=False, summary="a")
+    msg_a = InboxMessage(
+        from_="lead", text="A", timestamp=now_iso(), read=False, summary="a"
+    )
     append_message("test-team", "race", msg_a, base_dir=tmp_claude_dir)
 
     path = inbox_path("test-team", "race", base_dir=tmp_claude_dir)

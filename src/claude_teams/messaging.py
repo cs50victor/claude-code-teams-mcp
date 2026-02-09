@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -23,7 +23,7 @@ def _teams_dir(base_dir: Path | None = None) -> Path:
 
 
 def now_iso() -> str:
-    dt = datetime.now(timezone.utc)
+    dt = datetime.now(UTC)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
@@ -65,7 +65,9 @@ def read_inbox(
                 for m in all_msgs:
                     if m in result:
                         m.read = True
-                serialized = [m.model_dump(by_alias=True, exclude_none=True) for m in all_msgs]
+                serialized = [
+                    m.model_dump(by_alias=True, exclude_none=True) for m in all_msgs
+                ]
                 path.write_text(json.dumps(serialized))
 
             return result
@@ -145,7 +147,9 @@ def send_task_assignment(
         assigned_by=assigned_by,
         timestamp=now_iso(),
     )
-    send_structured_message(team_name, assigned_by, task.owner, payload, base_dir=base_dir)
+    send_structured_message(
+        team_name, assigned_by, task.owner, payload, base_dir=base_dir
+    )
 
 
 def send_shutdown_request(
@@ -161,5 +165,7 @@ def send_shutdown_request(
         reason=reason,
         timestamp=now_iso(),
     )
-    send_structured_message(team_name, "team-lead", recipient, payload, base_dir=base_dir)
+    send_structured_message(
+        team_name, "team-lead", recipient, payload, base_dir=base_dir
+    )
     return request_id

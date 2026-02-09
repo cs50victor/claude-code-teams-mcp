@@ -29,22 +29,30 @@ def _mock_response(status: int = 200, body: bytes = b"{}") -> MagicMock:
 
 class TestVerifyMcpConfigured:
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
-    def test_should_pass_when_claude_teams_connected(self, mock_urlopen: MagicMock) -> None:
+    def test_should_pass_when_claude_teams_connected(
+        self, mock_urlopen: MagicMock
+    ) -> None:
         mock_urlopen.return_value = _mock_response(
             body=json.dumps({"claude-teams": {"status": "connected"}}).encode()
         )
         verify_mcp_configured("http://localhost:4096")
 
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
-    def test_should_raise_when_claude_teams_missing(self, mock_urlopen: MagicMock) -> None:
+    def test_should_raise_when_claude_teams_missing(
+        self, mock_urlopen: MagicMock
+    ) -> None:
         mock_urlopen.return_value = _mock_response(body=json.dumps({}).encode())
         with pytest.raises(OpenCodeAPIError, match="claude-teams"):
             verify_mcp_configured("http://localhost:4096")
 
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
-    def test_should_raise_when_claude_teams_disconnected(self, mock_urlopen: MagicMock) -> None:
+    def test_should_raise_when_claude_teams_disconnected(
+        self, mock_urlopen: MagicMock
+    ) -> None:
         mock_urlopen.return_value = _mock_response(
-            body=json.dumps({"claude-teams": {"status": "failed", "error": "crash"}}).encode()
+            body=json.dumps(
+                {"claude-teams": {"status": "failed", "error": "crash"}}
+            ).encode()
         )
         with pytest.raises(OpenCodeAPIError, match="claude-teams"):
             verify_mcp_configured("http://localhost:4096")
@@ -52,6 +60,7 @@ class TestVerifyMcpConfigured:
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_raise_on_network_error(self, mock_urlopen: MagicMock) -> None:
         import urllib.error
+
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
         with pytest.raises(OpenCodeAPIError, match="Cannot reach"):
             verify_mcp_configured("http://localhost:4096")
@@ -86,16 +95,23 @@ class TestCreateSession:
 
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_raise_when_no_id_returned(self, mock_urlopen: MagicMock) -> None:
-        mock_urlopen.return_value = _mock_response(body=json.dumps({"title": "t"}).encode())
+        mock_urlopen.return_value = _mock_response(
+            body=json.dumps({"title": "t"}).encode()
+        )
         with pytest.raises(OpenCodeAPIError, match="no session ID"):
             create_session("http://localhost:4096", "t")
 
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_raise_on_400(self, mock_urlopen: MagicMock) -> None:
         import urllib.error
-        resp = _mock_response(status=400, body=b'{"error":"bad"}')
+
+        _mock_response(status=400, body=b'{"error":"bad"}')
         err = urllib.error.HTTPError(
-            "http://localhost:4096/session", 400, "Bad Request", {}, BytesIO(b'{"error":"bad"}')
+            "http://localhost:4096/session",
+            400,
+            "Bad Request",
+            {},
+            BytesIO(b'{"error":"bad"}'),
         )
         mock_urlopen.side_effect = err
         with pytest.raises(OpenCodeAPIError, match="rejected"):
@@ -140,6 +156,7 @@ class TestAbortSession:
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_raise_on_404(self, mock_urlopen: MagicMock) -> None:
         import urllib.error
+
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "url", 404, "Not Found", {}, BytesIO(b"")
         )
@@ -166,7 +183,9 @@ class TestGetSessionStatus:
         assert get_session_status("http://localhost:4096", "ses_1") == "idle"
 
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
-    def test_should_return_unknown_for_missing_session(self, mock_urlopen: MagicMock) -> None:
+    def test_should_return_unknown_for_missing_session(
+        self, mock_urlopen: MagicMock
+    ) -> None:
         mock_urlopen.return_value = _mock_response(
             body=json.dumps({"ses_other": "idle"}).encode()
         )
@@ -176,14 +195,14 @@ class TestGetSessionStatus:
 class TestRequestErrorHandling:
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_handle_timeout(self, mock_urlopen: MagicMock) -> None:
-        import socket
-        mock_urlopen.side_effect = socket.timeout("timed out")
+        mock_urlopen.side_effect = TimeoutError("timed out")
         with pytest.raises(OpenCodeAPIError, match="timed out"):
             create_session("http://localhost:4096", "t")
 
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_handle_5xx(self, mock_urlopen: MagicMock) -> None:
         import urllib.error
+
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "url", 502, "Bad Gateway", {}, BytesIO(b"server down")
         )
@@ -193,6 +212,7 @@ class TestRequestErrorHandling:
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_handle_unexpected_status(self, mock_urlopen: MagicMock) -> None:
         import urllib.error
+
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "url", 418, "I'm a Teapot", {}, BytesIO(b"teapot")
         )

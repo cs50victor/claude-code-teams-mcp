@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from claude_teams.models import (
     COLOR_PALETTE,
     IdleNotification,

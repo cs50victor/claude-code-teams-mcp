@@ -17,6 +17,10 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=6.0",
+    "ruff>=0.12.0",
+    "mypy>=1.11.0",
+    "pre-commit>=4.0",
 ]
 
 [project.scripts]
@@ -25,6 +29,111 @@ claude-teams = "claude_teams.server:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/claude_teams"]
 
+# -- Ruff ------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src"]
+extend-exclude = ["stress_test_*.py"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "E501",     # line too long
+    "B008",     # function calls in argument defaults
+    "C901",     # too complex
+    "G004",     # f-string in logging
+    "D203",     # blank line before class docstring (conflicts D211)
+    "D212",     # multi-line docstring start at first line (conflicts Google-style)
+    "D213",     # multi-line docstring summary at second line
+    "D401",     # imperative mood
+    "COM812",   # trailing comma (conflicts ruff format)
+    "PLR2004",  # magic values
+    "ANN401",   # Any type
+    "RUF012",   # mutable class attributes should be ClassVar
+    "PLR0913",  # too many arguments
+    "PLR0912",  # too many branches
+    "PLR0915",  # too many statements
+    "PLR0911",  # too many return statements
+    "PLW0603",  # global statement
+    "S603",     # subprocess call with shell=false (false positive)
+    "S607",     # start process with partial path (intentional: tmux, claude)
+    "S110",     # try-except-pass (common in cleanup code)
+    "TD002", "TD003", "FIX002",  # TODO format requirements
+    "D1",       # missing docstrings
+    "D205", "D209", "D400", "D415",  # docstring formatting
+    "TRY003",   # raise with long message
+    "TRY300",   # try-consider-else
+    "EM101", "EM102", "EM103",  # string in exception
+    "BLE001",   # blind except (common in cleanup)
+    "FBT001", "FBT002", "FBT003",  # boolean args (common API pattern)
+    "TC002", "TC003",  # type-checking imports
+    "SIM105",   # suppressible-exception (contextlib.suppress)
+    "PLW1510",  # subprocess.run without check (intentional)
+    "B904",     # raise-without-from (pervasive pattern)
+    "PERF401",  # manual-list-comprehension
+    "S310",     # suspicious-url-open (false positive for urllib)
+    "PTH105", "PTH108", "PTH110",  # os.path/os.replace (common pattern)
+    "SIM102", "SIM103", "SIM117",  # simplification suggestions
+    "A002",     # builtin-argument-shadowing (type param in send_message)
+    "C408",     # unnecessary-collection-call
+    "N806",     # non-lowercase variable in function
+    "PLC0415",  # import outside top-level
+    "ARG005",   # unused-lambda-argument
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101", "S106", "S108",
+    "ANN", "D",
+    "ARG001", "ARG002",
+    "TRY", "EM",
+    "FBT", "SLF001", "PT011",
+    "PLR0915", "PLR6301",
+    "BLE001", "B017",
+    "PLC0415", "N802", "N806",
+    "RUF100",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# -- MyPy -------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+disallow_any_generics = false
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+explicit_package_bases = true
+namespace_packages = true
+ignore_missing_imports = true
+files = ["src"]
+
+# -- Pytest -----------------------------------------------------------------
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-ra -q --cov=src/claude_teams --cov-report=term-missing"
+
+# -- Coverage ---------------------------------------------------------------
+
+[tool.coverage.run]
+source = ["src/claude_teams"]
+omit = ["*/tests/*", "*/test_*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

@@ -12,7 +12,7 @@ class OpenCodeAPIError(Exception):
         message: str,
         status_code: int | None = None,
         response_body: str | None = None,
-    ):
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
@@ -64,7 +64,7 @@ def _request(
                 f"Opencode server at {url} timed out after {timeout}s"
             )
         raise OpenCodeAPIError(f"Cannot reach opencode server at {url}: {e.reason}")
-    except socket.timeout:
+    except TimeoutError:
         raise OpenCodeAPIError(f"Opencode server at {url} timed out after {timeout}s")
 
 
@@ -92,7 +92,7 @@ def verify_mcp_configured(server_url: str) -> None:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        raise OpenCodeAPIError(f"Opencode returned invalid JSON from /mcp")
+        raise OpenCodeAPIError("Opencode returned invalid JSON from /mcp")
     ct = data.get("claude-teams")
     if not ct or ct.get("status") != "connected":
         raise OpenCodeAPIError(_MCP_NOT_CONFIGURED_MSG.format(server_url=server_url))
@@ -163,3 +163,13 @@ def get_session_status(server_url: str, session_id: str) -> str:
     except json.JSONDecodeError:
         raise OpenCodeAPIError("Opencode returned invalid JSON from /session/status")
     return data.get(session_id, "unknown")
+
+
+def get_session_result(server_url: str, session_id: str) -> str:
+    """Get the output/result from a completed opencode session."""
+    raw = _request("GET", f"{server_url}/session/{session_id}")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise OpenCodeAPIError("Opencode returned invalid JSON from /session")
+    return data.get("result", "")

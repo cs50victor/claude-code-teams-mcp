@@ -45,9 +45,13 @@ def create_team(
     base_dir: Path | None = None,
 ) -> TeamCreateResult:
     if not _VALID_NAME_RE.match(name):
-        raise ValueError(f"Invalid team name: {name!r}. Use only letters, numbers, hyphens, underscores.")
+        raise ValueError(
+            f"Invalid team name: {name!r}. Use only letters, numbers, hyphens, underscores."
+        )
     if len(name) > 64:
-        raise ValueError(f"Team name too long ({len(name)} chars, max 64): {name[:20]!r}...")
+        raise ValueError(
+            f"Team name too long ({len(name)} chars, max 64): {name[:20]!r}..."
+        )
 
     teams_dir = _teams_dir(base_dir)
     tasks_dir = _tasks_dir(base_dir)
@@ -81,7 +85,9 @@ def create_team(
     )
 
     config_path = team_dir / "config.json"
-    config_path.write_text(json.dumps(config.model_dump(by_alias=True, exclude_none=True), indent=2))
+    config_path.write_text(
+        json.dumps(config.model_dump(by_alias=True, exclude_none=True), indent=2)
+    )
 
     return TeamCreateResult(
         team_name=name,
@@ -100,7 +106,10 @@ def read_config(name: str, base_dir: Path | None = None) -> TeamConfig:
 
 
 def _replace_with_retry(
-    src: str | os.PathLike, dst: str | os.PathLike, retries: int = 5, base_delay: float = 0.05
+    src: str | os.PathLike,
+    dst: str | os.PathLike,
+    retries: int = 5,
+    base_delay: float = 0.05,
 ) -> None:
     for attempt in range(retries):
         try:
@@ -164,7 +173,9 @@ def add_member(name: str, member: TeammateMember, base_dir: Path | None = None) 
     write_config(name, config, base_dir=base_dir)
 
 
-def remove_member(team_name: str, agent_name: str, base_dir: Path | None = None) -> None:
+def remove_member(
+    team_name: str, agent_name: str, base_dir: Path | None = None
+) -> None:
     if agent_name == "team-lead":
         raise ValueError("Cannot remove team-lead from team")
     config = read_config(team_name, base_dir=base_dir)

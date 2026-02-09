@@ -5,9 +5,53 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - run: uv sync --locked --group dev
+
+      - name: Lint with ruff
+        run: uv run ruff check src/ tests/
+
+      - name: Check formatting
+        run: uv run ruff format --check src/ tests/
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - run: uv sync --locked --group dev
+
+      - name: Type check with mypy
+        run: uv run mypy src/
+
   test:
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: [lint]
     strategy:
       fail-fast: false
       matrix:
@@ -17,8 +61,29 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
         with:
-          version: "0.9.26"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - run: uv sync --locked --group dev
 
-      - run: uv run pytest
+      - name: Run tests with coverage
+        run: uv run pytest --tb=short
+
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [lint, type-check, test]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "Lint failed"; exit 1
+          fi
+          if [ "${{ needs.type-check.result }}" != "success" ]; then
+            echo "Type check failed"; exit 1
+          fi
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "Tests failed"; exit 1
+          fi
+          echo "All checks passed"
