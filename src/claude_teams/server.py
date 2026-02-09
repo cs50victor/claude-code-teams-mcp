@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import uuid
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from fastmcp import Context, FastMCP
@@ -37,18 +38,15 @@ KNOWN_CLIENTS: dict[str, str] = {
     "opencode": "opencode",
 }
 
-# note(victor): _lifespan_state and _spawn_tool are module globals mutated by
-# both app_lifespan and HarnessDetectionMiddleware. This works because FastMCP
-# 3.0.0b1 stores the yielded lifespan dict by reference (not copy):
+# NOTE(victor): Mutated by both app_lifespan and HarnessDetectionMiddleware.
+# Safe under stdio (single session). Racy under SSE/streamable HTTP.
 #
+# more context:
 #   app_lifespan yields _lifespan_state
 #     -> _lifespan_manager stores as self._lifespan_result (same ref)
 #     -> _lifespan_proxy yields self._lifespan_result
 #     -> ctx.lifespan_context in tool handlers returns it
-#
-# All references point to the same dict. Middleware mutations propagate.
-# Safe under stdio transport (single session). Latent race if transport
-# changes to SSE/streamable HTTP with concurrent clients.
+#   All references point to the same dict. Middleware mutations propagate.
 _lifespan_state: dict[str, Any] = {}
 _spawn_tool: Any = None
 
@@ -103,6 +101,20 @@ def _build_spawn_description(
     return " ".join(parts)
 
 
+def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
+    tool.parameters["properties"]["backend_type"]["enum"] = list(enabled)
+    if enabled:
+        tool.parameters["properties"]["backend_type"]["default"] = enabled[0]
+    tool.description = _build_spawn_description(
+        state.get("claude_binary"),
+        state.get("opencode_binary"),
+        state.get("opencode_models", []),
+        state.get("opencode_server_url"),
+        state.get("opencode_agents"),
+        enabled_backends=enabled,
+    )
+
+
 @lifespan
 async def app_lifespan(server):
     global _spawn_tool
@@ -128,18 +140,20 @@ async def app_lifespan(server):
             )
 
     enabled_backends = _parse_backends_env(os.environ.get("CLAUDE_TEAMS_BACKENDS", ""))
+    if "opencode" in enabled_backends and not opencode_server_url:
+        enabled_backends.remove("opencode")
 
     tool = await mcp.get_tool("spawn_teammate")
     _spawn_tool = tool
 
     if enabled_backends:
-        tool.parameters["properties"]["backend_type"]["enum"] = list(enabled_backends)
-        tool.parameters["properties"]["backend_type"]["default"] = enabled_backends[0]
-        tool.description = _build_spawn_description(
-            claude_binary, opencode_binary, opencode_models,
-            opencode_server_url, opencode_agents,
-            enabled_backends=enabled_backends,
-        )
+        _update_spawn_tool(tool, enabled_backends, {
+            "claude_binary": claude_binary,
+            "opencode_binary": opencode_binary,
+            "opencode_models": opencode_models,
+            "opencode_server_url": opencode_server_url,
+            "opencode_agents": opencode_agents,
+        })
     else:
         tool.description = _build_spawn_description(
             claude_binary, opencode_binary, opencode_models,
@@ -169,7 +183,8 @@ class HarnessDetectionMiddleware(Middleware):
     # handlers via ctx.session.client_params.clientInfo (stored by the MCP SDK).
 
     async def on_initialize(self, context, call_next):
-        client_info = context.message.params.clientInfo
+        _unknown = SimpleNamespace(name="unknown", version="unknown")
+        client_info = context.message.params.clientInfo or _unknown
         client_name = client_info.name
         client_version = client_info.version
 
@@ -195,17 +210,7 @@ class HarnessDetectionMiddleware(Middleware):
         _lifespan_state["client_version"] = client_version
 
         if _spawn_tool:
-            _spawn_tool.parameters["properties"]["backend_type"]["enum"] = list(enabled)
-            if enabled:
-                _spawn_tool.parameters["properties"]["backend_type"]["default"] = enabled[0]
-            _spawn_tool.description = _build_spawn_description(
-                _lifespan_state.get("claude_binary"),
-                _lifespan_state.get("opencode_binary"),
-                _lifespan_state.get("opencode_models", []),
-                _lifespan_state.get("opencode_server_url"),
-                _lifespan_state.get("opencode_agents"),
-                enabled_backends=enabled,
-            )
+            _update_spawn_tool(_spawn_tool, enabled, _lifespan_state)
 
         return result
 

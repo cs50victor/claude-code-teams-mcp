@@ -1111,6 +1111,49 @@ class TestEnabledBackendsValidation:
         assert result.is_error is False
 
 
+@pytest.fixture
+async def opencode_env_no_url_client(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(teams, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
+    monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+    monkeypatch.setenv("CLAUDE_TEAMS_BACKENDS", "claude,opencode")
+    monkeypatch.delenv("OPENCODE_SERVER_URL", raising=False)
+    monkeypatch.setattr(
+        "claude_teams.server.discover_harness_binary",
+        lambda name: "/usr/bin/echo" if name in ("claude", "opencode") else None,
+    )
+    monkeypatch.setattr(
+        "claude_teams.server.discover_opencode_models",
+        lambda binary: ["anthropic/claude-opus-4-6"],
+    )
+    (tmp_path / "teams").mkdir()
+    (tmp_path / "tasks").mkdir()
+    async with Client(mcp) as c:
+        yield c
+
+
+class TestOpencodeWithoutUrl:
+    async def test_should_exclude_opencode_when_url_missing(
+        self, opencode_env_no_url_client: Client
+    ):
+        await opencode_env_no_url_client.call_tool(
+            "team_create", {"team_name": "tnou"}
+        )
+        result = await opencode_env_no_url_client.call_tool(
+            "spawn_teammate",
+            {
+                "team_name": "tnou",
+                "name": "worker",
+                "prompt": "do stuff",
+                "backend_type": "opencode",
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not enabled" in result.content[0].text.lower()
+
+
 class TestEnabledBackendsEnvParsing:
     def test_should_parse_comma_separated_backends(self):
         assert _parse_backends_env("claude,opencode") == ["claude", "opencode"]
