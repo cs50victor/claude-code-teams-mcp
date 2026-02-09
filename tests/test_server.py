@@ -1067,6 +1067,10 @@ async def claude_only_env_client(tmp_path: Path, monkeypatch):
         "claude_teams.server.discover_opencode_models",
         lambda binary: ["anthropic/claude-opus-4-6"],
     )
+    monkeypatch.setattr(
+        "claude_teams.spawner.subprocess.run",
+        lambda *a, **kw: type("R", (), {"stdout": "%99\n"})(),
+    )
     (tmp_path / "teams").mkdir()
     (tmp_path / "tasks").mkdir()
     async with Client(mcp) as c:
@@ -1103,10 +1107,8 @@ class TestEnabledBackendsValidation:
                 "prompt": "do stuff",
                 "backend_type": "claude",
             },
-            raise_on_error=False,
         )
-        if result.is_error:
-            assert "not enabled" not in result.content[0].text.lower()
+        assert result.is_error is False
 
 
 class TestEnabledBackendsEnvParsing:

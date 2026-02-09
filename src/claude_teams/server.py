@@ -37,6 +37,18 @@ KNOWN_CLIENTS: dict[str, str] = {
     "opencode": "opencode",
 }
 
+# note(victor): _lifespan_state and _spawn_tool are module globals mutated by
+# both app_lifespan and HarnessDetectionMiddleware. This works because FastMCP
+# 3.0.0b1 stores the yielded lifespan dict by reference (not copy):
+#
+#   app_lifespan yields _lifespan_state
+#     -> _lifespan_manager stores as self._lifespan_result (same ref)
+#     -> _lifespan_proxy yields self._lifespan_result
+#     -> ctx.lifespan_context in tool handlers returns it
+#
+# All references point to the same dict. Middleware mutations propagate.
+# Safe under stdio transport (single session). Latent race if transport
+# changes to SSE/streamable HTTP with concurrent clients.
 _lifespan_state: dict[str, Any] = {}
 _spawn_tool: Any = None
 
@@ -169,12 +181,13 @@ class HarnessDetectionMiddleware(Middleware):
         enabled = _lifespan_state.get("enabled_backends", [])
 
         if native_backend and native_backend not in enabled:
-            enabled.append(native_backend)
+            if native_backend == "claude" or _lifespan_state.get("opencode_server_url"):
+                enabled.append(native_backend)
 
         if not enabled:
             if _lifespan_state.get("claude_binary"):
                 enabled.append("claude")
-            if _lifespan_state.get("opencode_binary"):
+            if _lifespan_state.get("opencode_binary") and _lifespan_state.get("opencode_server_url"):
                 enabled.append("opencode")
 
         _lifespan_state["enabled_backends"] = enabled
