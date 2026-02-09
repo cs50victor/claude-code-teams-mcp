@@ -9,6 +9,7 @@ from typing import Any, Literal
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.lifespan import lifespan
+from fastmcp.server.middleware import Middleware
 
 from claude_teams import messaging, opencode_client, tasks, teams
 from claude_teams.models import (
@@ -103,7 +104,26 @@ async def app_lifespan(server):
         "opencode_agents": opencode_agents,
         "session_id": session_id,
         "active_team": None,
+        "client_name": "unknown",
+        "client_version": "unknown",
     }
+
+
+class HarnessDetectionMiddleware(Middleware):
+    # NOTE(victor): ctx.lifespan_context returns {} during on_initialize because
+    # RequestContext isn't established yet. Client info is accessible from tool
+    # handlers via ctx.session.client_params.clientInfo (stored by the MCP SDK).
+
+    async def on_initialize(self, context, call_next):
+        client_info = context.message.params.clientInfo
+        client_name = client_info.name
+        client_version = client_info.version
+
+        result = await call_next(context)
+
+        logger.info("MCP client connected: %s v%s", client_name, client_version)
+
+        return result
 
 
 mcp = FastMCP(
@@ -114,6 +134,7 @@ mcp = FastMCP(
     ),
     lifespan=app_lifespan,
 )
+mcp.add_middleware(HarnessDetectionMiddleware())
 
 
 def _get_lifespan(ctx: Context) -> dict[str, Any]:
