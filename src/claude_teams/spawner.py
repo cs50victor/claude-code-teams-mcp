@@ -79,6 +79,11 @@ def assign_color(team_name: str, base_dir: Path | None = None) -> str:
     return COLOR_PALETTE[count % len(COLOR_PALETTE)]
 
 
+def skip_permissions() -> bool:
+    """Return True when spawned teammates should skip permission prompts."""
+    return os.environ.get("CLAUDE_TEAMS_DANGEROUSLY_SKIP_PERMISSIONS") is not None
+
+
 def build_spawn_command(
     member: TeammateMember,
     claude_binary: str,
@@ -99,6 +104,8 @@ def build_spawn_command(
     )
     if member.plan_mode_required:
         cmd += " --plan-mode-required"
+    if skip_permissions():
+        cmd += " --dangerously-skip-permissions"
     return cmd
 
 
