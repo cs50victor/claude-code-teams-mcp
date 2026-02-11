@@ -24,7 +24,9 @@ from claude_teams.models import (
 from claude_teams.opencode_client import OpenCodeAPIError
 from claude_teams.orchestrator import TeamOrchestrator
 from claude_teams.presets import (
+    MCPServerConfig,
     Permission,
+    SkillsConfig,
     discover_and_load,
     discover_preset_path,
     load_preset,
@@ -350,9 +352,15 @@ def spawn_teammate_tool(
     subagent_type: str = "general-purpose",
     plan_mode_required: bool = False,
     backend_type: Literal["claude", "opencode"] = "claude",
+    add_dirs: list[str] | None = None,
+    mcp_servers: dict[str, dict] | None = None,
 ) -> dict:
     """Spawn a new teammate in tmux. Description is dynamically updated
-    at startup with available backends and models."""
+    at startup with available backends and models.
+
+    Optional add_dirs provides skill directories (--add-dir for Claude Code).
+    Optional mcp_servers provides additional MCP server configs per agent.
+    """
     ls = _get_lifespan(ctx)
     enabled = ls.get("enabled_backends", [])
     if enabled and backend_type not in enabled:
@@ -361,6 +369,14 @@ def spawn_teammate_tool(
     if backend_type == "opencode":
         known = {a["name"] for a in ls.get("opencode_agents", [])}
         opencode_agent = subagent_type if subagent_type in known else "build"
+
+    skills_config = SkillsConfig(addDirs=add_dirs) if add_dirs else None
+    mcp_server_configs = (
+        {n: MCPServerConfig(**c) for n, c in mcp_servers.items()}
+        if mcp_servers
+        else None
+    )
+
     try:
         member = spawn_teammate(
             team_name=team_name,
@@ -376,6 +392,8 @@ def spawn_teammate_tool(
             opencode_server_url=ls["opencode_server_url"],
             opencode_agent=opencode_agent,
             tmux_target=ls.get("tmux_target"),
+            skills=skills_config,
+            mcp_servers=mcp_server_configs,
         )
     except (ValueError, OpenCodeAPIError) as e:
         raise ToolError(str(e))
@@ -1083,12 +1101,17 @@ def spawn_subagent(
     ctx: Context,
     model: str = "sonnet",
     permissions: dict | None = None,
+    add_dirs: list[str] | None = None,
+    mcp_servers: dict[str, dict] | None = None,
 ) -> dict:
     """Spawn a sub-agent under a worker. Enforces:
     - Parent must have can_spawn=True in their permissions
     - Parent cannot be the supervisor
     - Sub-agent permissions must be <= parent's permissions
-    - Sub-agent is auto-killed when parent finishes"""
+    - Sub-agent is auto-killed when parent finishes
+
+    Optional add_dirs provides skill directories (--add-dir for Claude Code).
+    Optional mcp_servers provides additional MCP server configs."""
     ls = _get_lifespan(ctx)
     orchestrator = _get_orchestrator(ctx)
 
@@ -1122,6 +1145,13 @@ def spawn_subagent(
         known = {a["name"] for a in ls.get("opencode_agents", [])}
         opencode_agent = "build" if "build" in known else None
 
+    skills_config = SkillsConfig(addDirs=add_dirs) if add_dirs else None
+    mcp_server_configs = (
+        {n: MCPServerConfig(**c) for n, c in mcp_servers.items()}
+        if mcp_servers
+        else None
+    )
+
     try:
         member = spawn_teammate(
             team_name=team_name,
@@ -1138,6 +1168,8 @@ def spawn_subagent(
             permissions=sub_perms,
             parent_name=parent_name,
             tmux_target=ls.get("tmux_target"),
+            skills=skills_config,
+            mcp_servers=mcp_server_configs,
         )
     except (ValueError, OpenCodeAPIError) as e:
         raise ToolError(str(e))

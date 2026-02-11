@@ -13,8 +13,10 @@ from claude_teams.presets import (
     Permission,
     TeamPreset,
     build_supervisor_prompt,
+    resolve_agent_config,
 )
 from claude_teams.spawner import (
+    cleanup_agent_temp_dir,
     clear_sub_agents,
     get_sub_agents,
     is_tmux_pane_alive,
@@ -134,6 +136,11 @@ class TeamOrchestrator:
                         spec.agent_type if spec.agent_type in known else "build"
                     )
 
+                # Merge team-level and agent-level skills/MCP configs
+                merged_skills, merged_mcp = resolve_agent_config(
+                    self.preset, spec.skills, spec.mcp_servers
+                )
+
                 member = spawn_teammate(
                     team_name=self.team_name,
                     name=spec.name,
@@ -151,6 +158,8 @@ class TeamOrchestrator:
                     opencode_agent=opencode_agent,
                     permissions=spec.permissions,
                     tmux_target=self._tmux_target,
+                    skills=merged_skills if merged_skills.add_dirs else None,
+                    mcp_servers=merged_mcp or None,
                 )
                 self._agents[spec.name] = _TrackedAgent(name=spec.name, member=member)
 
@@ -165,6 +174,11 @@ class TeamOrchestrator:
                 opencode_agent = (
                     sup_spec.agent_type if sup_spec.agent_type in known else "build"
                 )
+
+            # Merge team-level and supervisor-level skills/MCP configs
+            sup_skills, sup_mcp = resolve_agent_config(
+                self.preset, sup_spec.skills, sup_spec.mcp_servers
+            )
 
             sup_member = spawn_teammate(
                 team_name=self.team_name,
@@ -182,6 +196,8 @@ class TeamOrchestrator:
                 opencode_agent=opencode_agent,
                 permissions=sup_spec.permissions,
                 tmux_target=self._tmux_target,
+                skills=sup_skills if sup_skills.add_dirs else None,
+                mcp_servers=sup_mcp or None,
             )
             self._agents["supervisor"] = _TrackedAgent(
                 name="supervisor", member=sup_member, is_supervisor=True
@@ -376,6 +392,9 @@ class TeamOrchestrator:
 
         oc_url = self._ls.get("opencode_server_url")
         member = tracked.member
+
+        # Clean up temp MCP config directory
+        cleanup_agent_temp_dir(member.agent_id)
 
         # Kill tmux pane/window
         if member.tmux_pane_id:

@@ -127,6 +127,40 @@ def _glob_covers(parent_glob: str, child_glob: str) -> bool:
     return fnmatch(child_glob, parent_glob)
 
 
+class MCPServerConfig(BaseModel):
+    """Configuration for an additional MCP server to attach to an agent."""
+
+    model_config = {"populate_by_name": True}
+
+    command: str = Field(
+        description="Command to run the MCP server (e.g. 'npx', 'uvx')."
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="Arguments for the command.",
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Environment variables for the server process.",
+    )
+
+
+class SkillsConfig(BaseModel):
+    """Skills configuration — filesystem paths containing skill directories."""
+
+    model_config = {"populate_by_name": True}
+
+    add_dirs: list[str] = Field(
+        alias="addDirs",
+        default_factory=list,
+        description=(
+            "Directories to add for skill discovery. "
+            "For Claude Code: each should contain .claude/skills/. "
+            "For OpenCode: each should contain .opencode/skills/."
+        ),
+    )
+
+
 class TeammateSpec(BaseModel):
     """Worker agent definition — immutable after team creation."""
 
@@ -143,6 +177,12 @@ class TeammateSpec(BaseModel):
     plan_mode_required: bool = Field(alias="planModeRequired", default=False)
     cwd: str | None = None
     permissions: Permission = Field(default_factory=Permission)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    mcp_servers: dict[str, MCPServerConfig] = Field(
+        alias="mcpServers",
+        default_factory=dict,
+        description="Additional MCP servers for this agent.",
+    )
 
     @field_validator("name")
     @classmethod
@@ -173,6 +213,12 @@ class SupervisorSpec(BaseModel):
     agent_type: str = Field(alias="agentType", default="general-purpose")
     instructions: str = Field(
         default="", description="Additional context appended to supervisor prompt."
+    )
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    mcp_servers: dict[str, MCPServerConfig] = Field(
+        alias="mcpServers",
+        default_factory=dict,
+        description="Additional MCP servers for this agent.",
     )
 
     @property
@@ -206,6 +252,12 @@ class TeamPreset(BaseModel):
     teammates: list[TeammateSpec]
     supervisor: SupervisorSpec = Field(default_factory=SupervisorSpec)
     lifecycle: LifecycleConfig = Field(default_factory=LifecycleConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    mcp_servers: dict[str, MCPServerConfig] = Field(
+        alias="mcpServers",
+        default_factory=dict,
+        description="Team-level MCP servers inherited by all agents.",
+    )
 
     @field_validator("name")
     @classmethod
@@ -425,6 +477,68 @@ def _parse_tool_pattern(spec: str) -> tuple[str, str]:
         idx = spec.index("(")
         return spec[:idx], spec[idx + 1 : -1]
     return spec, "*"
+
+
+# ---------------------------------------------------------------------------
+# Skills & MCP server resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_agent_config(
+    preset: TeamPreset,
+    agent_skills: SkillsConfig,
+    agent_mcp_servers: dict[str, MCPServerConfig],
+) -> tuple[SkillsConfig, dict[str, MCPServerConfig]]:
+    """Merge team-level and agent-level skills/MCP server configs.
+
+    Skills ``add_dirs`` are concatenated (team first, then agent), deduplicated.
+    MCP servers: agent-level entries override team-level entries with the same name.
+    """
+    all_dirs: list[str] = []
+    seen: set[str] = set()
+    for d in [*preset.skills.add_dirs, *agent_skills.add_dirs]:
+        if d not in seen:
+            all_dirs.append(d)
+            seen.add(d)
+    merged_skills = SkillsConfig(addDirs=all_dirs)
+
+    merged_mcp = {**preset.mcp_servers, **agent_mcp_servers}
+
+    return merged_skills, merged_mcp
+
+
+def build_skill_flags(skills: SkillsConfig) -> list[str]:
+    """Translate a :class:`SkillsConfig` into Claude CLI ``--add-dir`` flags."""
+    flags: list[str] = []
+    for dir_path in skills.add_dirs:
+        flags.extend(["--add-dir", dir_path])
+    return flags
+
+
+def build_mcp_config_json(mcp_servers: dict[str, MCPServerConfig]) -> dict:
+    """Build a ``.mcp.json``-compatible dict from MCP server configs."""
+    servers: dict[str, dict] = {}
+    for name, config in mcp_servers.items():
+        entry: dict = {"command": config.command, "args": config.args}
+        if config.env:
+            entry["env"] = config.env
+        servers[name] = entry
+    return {"mcpServers": servers}
+
+
+def build_opencode_mcp_config(mcp_servers: dict[str, MCPServerConfig]) -> dict:
+    """Translate MCP server configs into OpenCode-compatible format."""
+    config: dict[str, dict] = {}
+    for name, server in mcp_servers.items():
+        entry: dict = {
+            "type": "local",
+            "command": [server.command, *server.args],
+            "enabled": True,
+        }
+        if server.env:
+            entry["env"] = server.env
+        config[name] = entry
+    return config
 
 
 # ---------------------------------------------------------------------------

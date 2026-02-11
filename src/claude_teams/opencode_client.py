@@ -102,10 +102,13 @@ def create_session(
     server_url: str,
     title: str,
     permissions: list[dict] | None = None,
+    mcp_config: dict | None = None,
 ) -> str:
     body: dict = {"title": title}
     if permissions is not None:
         body["permission"] = permissions
+    if mcp_config is not None:
+        body["mcp"] = mcp_config
     raw = _request("POST", f"{server_url}/session", body)
     try:
         data = json.loads(raw)

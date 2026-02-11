@@ -134,7 +134,9 @@ Create `claude_team.py` in your project root:
 ```python
 from claude_teams.presets import (
     LifecycleConfig,
+    MCPServerConfig,
     Permission,
+    SkillsConfig,
     SupervisorSpec,
     TeamPreset,
     TeammateSpec,
@@ -143,6 +145,16 @@ from claude_teams.presets import (
 preset = TeamPreset(
     name="dev-team",
     description="A development team with a supervisor, developer, and reviewer.",
+    # Team-level skills — available to ALL agents
+    skills=SkillsConfig(add_dirs=["./shared-skills"]),
+    # Team-level MCP servers — available to ALL agents
+    mcp_servers={
+        "github": MCPServerConfig(
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-github"],
+            env={"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"},
+        ),
+    },
     supervisor=SupervisorSpec(
         model="sonnet",
         backend_type="claude",
@@ -163,6 +175,15 @@ preset = TeamPreset(
                 allowed_tools=["Bash(npm test *)", "Bash(uv run pytest *)"],
                 can_spawn=False,
             ),
+            # Agent-specific skills (in addition to team-level)
+            skills=SkillsConfig(add_dirs=["./dev-skills"]),
+            # Agent-specific MCP server (in addition to team-level)
+            mcp_servers={
+                "filesystem": MCPServerConfig(
+                    command="npx",
+                    args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                ),
+            },
         ),
         TeammateSpec(
             name="reviewer",
@@ -207,6 +228,44 @@ Each teammate gets granular permissions enforced by the MCP server:
 
 Sub-agent permissions are validated at spawn time — a sub-agent can never have more permissions than its parent.
 
+### Skills & MCP Servers
+
+Skills and MCP servers can be configured at the **team level** (inherited by all agents) and/or the **agent level** (additive). Agent-level configs are merged with team-level configs — skills directories are concatenated and deduplicated, MCP servers are merged by name with agent-level overriding team-level.
+
+#### Skills
+
+[Claude Code skills](https://docs.anthropic.com/en/docs/claude-code) are markdown-based instruction files (`SKILL.md`) discovered from `.claude/skills/` directories. OpenCode uses a similar `.opencode/skills/<name>/SKILL.md` convention.
+
+```python
+# Team-level: all agents get these skills
+skills=SkillsConfig(add_dirs=["./shared-skills"])
+
+# Agent-level: this agent also gets dev-specific skills
+skills=SkillsConfig(add_dirs=["./dev-skills"])
+```
+
+For Claude Code agents, skill directories are passed via `--add-dir` CLI flags. For OpenCode agents, skill directory info is included in the agent prompt.
+
+#### MCP Servers
+
+Additional [MCP servers](https://modelcontextprotocol.io/) can be attached to agents for extra tool capabilities (e.g. GitHub, filesystem, database).
+
+```python
+mcp_servers={
+    "github": MCPServerConfig(
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-github"],
+        env={"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"},
+    ),
+}
+```
+
+For Claude Code agents, a temporary `.mcp.json` is written to a unique directory and the agent is started there so it auto-discovers the servers. The original working directory is added back via `--add-dir` so file access is preserved. Temp directories are cleaned up on agent kill or failure.
+
+For OpenCode agents, the MCP config is passed directly to the session creation API.
+
+The `spawn_teammate` and `spawn_subagent` MCP tools also accept optional `add_dirs` (list of skill directory paths) and `mcp_servers` (dict of server configs) parameters for runtime configuration.
+
 ### Supervisor
 
 The supervisor is spawned with hardcoded read-only permissions (`Read`, `Grep`, `Glob` only). It coordinates work through tasks and messages but cannot modify code directly.
@@ -239,7 +298,7 @@ The supervisor is spawned with hardcoded read-only permissions (`Read`, `Grep`, 
 # Install dependencies
 uv sync --group dev
 
-# Run tests (323 tests, ~79% coverage)
+# Run tests (362 tests, ~80% coverage)
 uv run pytest
 
 # Lint

@@ -11,7 +11,9 @@ Usage (from an MCP client):
 
 from claude_teams.presets import (
     LifecycleConfig,
+    MCPServerConfig,
     Permission,
+    SkillsConfig,
     SupervisorSpec,
     TeamPreset,
     TeammateSpec,
@@ -20,6 +22,18 @@ from claude_teams.presets import (
 preset = TeamPreset(
     name="dev-team",
     description="A small development team with a supervisor, developer, and reviewer.",
+    # Team-level skills — available to ALL agents
+    skills=SkillsConfig(
+        add_dirs=["./shared-skills"],  # Directory containing .claude/skills/
+    ),
+    # Team-level MCP servers — available to ALL agents
+    mcp_servers={
+        "github": MCPServerConfig(
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-github"],
+            env={"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"},
+        ),
+    },
     # Supervisor — read-only, coordinates via tasks and messages
     supervisor=SupervisorSpec(
         model="sonnet",
@@ -47,6 +61,15 @@ preset = TeamPreset(
                 allowed_tools=["Bash(npm test *)", "Bash(uv run pytest *)"],
                 can_spawn=False,
             ),
+            # Agent-specific skills (in addition to team-level)
+            skills=SkillsConfig(add_dirs=["./dev-skills"]),
+            # Agent-specific MCP server (in addition to team-level)
+            mcp_servers={
+                "filesystem": MCPServerConfig(
+                    command="npx",
+                    args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                ),
+            },
         ),
         TeammateSpec(
             name="reviewer",

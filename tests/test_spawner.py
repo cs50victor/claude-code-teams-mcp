@@ -7,10 +7,14 @@ import pytest
 
 from claude_teams import messaging, teams
 from claude_teams.models import COLOR_PALETTE, TeammateMember
+from claude_teams.presets import MCPServerConfig, SkillsConfig
 from claude_teams.spawner import (
+    _agent_temp_dirs,
+    _prepare_mcp_config,
     assign_color,
     build_opencode_attach_command,
     build_spawn_command,
+    cleanup_agent_temp_dir,
     discover_harness_binary,
     discover_opencode_models,
     kill_tmux_pane,
@@ -570,3 +574,122 @@ class TestDiscoverOpencodeModels:
         assert discover_opencode_models("/bin/opencode") == [
             "anthropic/claude-opus-4-6"
         ]
+
+
+# ---------------------------------------------------------------------------
+# Skills & MCP server support in build_spawn_command
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSpawnCommandSkills:
+    def test_no_skills_yields_no_add_dir(self) -> None:
+        member = _make_member("dev")
+        cmd = build_spawn_command(member, "/usr/bin/claude", "sess-1")
+        assert "--add-dir" not in cmd
+
+    def test_skills_add_dir_flags(self) -> None:
+        member = _make_member("dev")
+        skills = SkillsConfig(addDirs=["/path/to/skills"])
+        cmd = build_spawn_command(member, "/usr/bin/claude", "sess-1", skills=skills)
+        assert "--add-dir" in cmd
+        assert "/path/to/skills" in cmd
+
+    def test_multiple_add_dirs(self) -> None:
+        member = _make_member("dev")
+        skills = SkillsConfig(addDirs=["/a", "/b"])
+        cmd = build_spawn_command(member, "/usr/bin/claude", "sess-1", skills=skills)
+        assert cmd.count("--add-dir") == 2
+
+    def test_extra_add_dirs(self) -> None:
+        member = _make_member("dev")
+        cmd = build_spawn_command(
+            member,
+            "/usr/bin/claude",
+            "sess-1",
+            extra_add_dirs=["/original/cwd"],
+        )
+        assert "--add-dir" in cmd
+        assert "/original/cwd" in cmd
+
+    def test_effective_cwd_overrides_member_cwd(self) -> None:
+        member = _make_member("dev", cwd="/original")
+        cmd = build_spawn_command(
+            member,
+            "/usr/bin/claude",
+            "sess-1",
+            effective_cwd="/temp/mcp-dir",
+        )
+        assert "cd /temp/mcp-dir" in cmd
+        assert "/original" not in cmd.split("&&")[0]
+
+    def test_skills_and_extra_dirs_combined(self) -> None:
+        member = _make_member("dev")
+        skills = SkillsConfig(addDirs=["/skills"])
+        cmd = build_spawn_command(
+            member,
+            "/usr/bin/claude",
+            "sess-1",
+            skills=skills,
+            extra_add_dirs=["/project"],
+        )
+        assert cmd.count("--add-dir") == 2
+        assert "/skills" in cmd
+        assert "/project" in cmd
+
+
+# ---------------------------------------------------------------------------
+# _prepare_mcp_config
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareMcpConfig:
+    def test_writes_mcp_json(self, tmp_path: Path) -> None:
+        servers = {"test": MCPServerConfig(command="echo", args=["hello"])}
+        effective_cwd, original_cwd = _prepare_mcp_config(servers, str(tmp_path))
+
+        assert original_cwd == str(tmp_path)
+        assert effective_cwd != str(tmp_path)
+        assert Path(effective_cwd).exists()
+
+        mcp_json = Path(effective_cwd) / ".mcp.json"
+        assert mcp_json.exists()
+
+        import json
+
+        data = json.loads(mcp_json.read_text())
+        assert "mcpServers" in data
+        assert "test" in data["mcpServers"]
+        assert data["mcpServers"]["test"]["command"] == "echo"
+
+    def test_temp_dir_has_prefix(self, tmp_path: Path) -> None:
+        servers = {"test": MCPServerConfig(command="echo", args=[])}
+        effective_cwd, _ = _prepare_mcp_config(servers, str(tmp_path))
+        assert "claude-teams-mcp-" in Path(effective_cwd).name
+
+
+# ---------------------------------------------------------------------------
+# cleanup_agent_temp_dir
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupAgentTempDir:
+    def test_cleans_up_existing_dir(self, tmp_path: Path) -> None:
+        temp_dir = tmp_path / "temp-mcp"
+        temp_dir.mkdir()
+        (temp_dir / ".mcp.json").write_text("{}")
+
+        agent_id = "test-agent@test-team"
+        _agent_temp_dirs[agent_id] = str(temp_dir)
+
+        cleanup_agent_temp_dir(agent_id)
+        assert not temp_dir.exists()
+        assert agent_id not in _agent_temp_dirs
+
+    def test_noop_if_no_temp_dir(self) -> None:
+        cleanup_agent_temp_dir("nonexistent@team")
+
+    def test_noop_if_dir_already_removed(self, tmp_path: Path) -> None:
+        agent_id = "ghost@team"
+        _agent_temp_dirs[agent_id] = str(tmp_path / "gone")
+        cleanup_agent_temp_dir(agent_id)
+        assert agent_id not in _agent_temp_dirs

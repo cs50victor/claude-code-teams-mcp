@@ -11,9 +11,14 @@ from pathlib import Path
 from claude_teams import messaging, opencode_client, teams
 from claude_teams.models import COLOR_PALETTE, InboxMessage, TeammateMember
 from claude_teams.presets import (
+    MCPServerConfig,
     Permission,
+    SkillsConfig,
+    build_mcp_config_json,
+    build_opencode_mcp_config,
     build_opencode_permissions,
     build_permission_flags,
+    build_skill_flags,
 )
 from claude_teams.teams import _VALID_NAME_RE
 
@@ -43,6 +48,35 @@ Start by reading your inbox for instructions.
 
 # parent_name → [child_name, ...] for sub-agent auto-cleanup
 _sub_agent_tree: dict[str, list[str]] = {}
+
+# agent_id → temp directory path for MCP config files
+_agent_temp_dirs: dict[str, str] = {}
+
+
+def _prepare_mcp_config(
+    mcp_servers: dict[str, MCPServerConfig],
+    base_cwd: str,
+) -> tuple[str, str]:
+    """Write a ``.mcp.json`` to a temp subdirectory of *base_cwd*.
+
+    Returns ``(effective_cwd, original_cwd)`` where *effective_cwd* is the
+    temp directory (so Claude Code discovers the ``.mcp.json`` in it) and
+    *original_cwd* should be added back via ``--add-dir``.
+    """
+    import json
+    import tempfile
+
+    mcp_dir = tempfile.mkdtemp(prefix="claude-teams-mcp-", dir=base_cwd)
+    mcp_json_path = Path(mcp_dir) / ".mcp.json"
+    mcp_json_path.write_text(json.dumps(build_mcp_config_json(mcp_servers), indent=2))
+    return mcp_dir, base_cwd
+
+
+def cleanup_agent_temp_dir(agent_id: str) -> None:
+    """Remove the temp MCP config directory for an agent, if one exists."""
+    temp_dir = _agent_temp_dirs.pop(agent_id, None)
+    if temp_dir and Path(temp_dir).exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def get_sub_agents(parent_name: str, team_name: str) -> list[str]:
@@ -161,11 +195,15 @@ def build_spawn_command(
     claude_binary: str,
     lead_session_id: str,
     permissions: Permission | None = None,
+    skills: SkillsConfig | None = None,
+    extra_add_dirs: list[str] | None = None,
+    effective_cwd: str | None = None,
 ) -> str:
     team_name = member.agent_id.split("@", 1)[1]
     system_prompt = _build_agent_system_prompt(member.name, team_name)
+    cwd = effective_cwd or member.cwd
     cmd = (
-        f"cd {shlex.quote(member.cwd)} && "
+        f"cd {shlex.quote(cwd)} && "
         f"CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 "
         f"{shlex.quote(claude_binary)} "
         f"--agent-id {shlex.quote(member.agent_id)} "
@@ -184,6 +222,12 @@ def build_spawn_command(
     if permissions is not None:
         for flag in build_permission_flags(permissions):
             cmd += f" {shlex.quote(flag)}"
+    if skills is not None:
+        for flag in build_skill_flags(skills):
+            cmd += f" {shlex.quote(flag)}"
+    if extra_add_dirs:
+        for d in extra_add_dirs:
+            cmd += f" --add-dir {shlex.quote(d)}"
     return cmd
 
 
@@ -220,6 +264,8 @@ def spawn_teammate(
     permissions: Permission | None = None,
     parent_name: str | None = None,
     tmux_target: str | None = None,
+    skills: SkillsConfig | None = None,
+    mcp_servers: dict[str, MCPServerConfig] | None = None,
 ) -> TeammateMember:
     if not _VALID_NAME_RE.match(name):
         raise ValueError(
@@ -255,10 +301,12 @@ def spawn_teammate(
             if permissions is not None
             else [{"permission": "*", "pattern": "*", "action": "allow"}]
         )
+        oc_mcp_config = build_opencode_mcp_config(mcp_servers) if mcp_servers else None
         opencode_session_id = opencode_client.create_session(
             opencode_server_url,
             title=f"{name}@{team_name}",
             permissions=oc_perms,
+            mcp_config=oc_mcp_config,
         )
 
     color = assign_color(team_name, base_dir)
@@ -314,8 +362,25 @@ def spawn_teammate(
                 resolved_cwd,
             )
         else:
+            # Prepare MCP config temp directory if custom MCP servers provided
+            effective_cwd: str | None = None
+            extra_add_dirs: list[str] | None = None
+            if mcp_servers:
+                effective_cwd, original_cwd = _prepare_mcp_config(
+                    mcp_servers, resolved_cwd
+                )
+                extra_add_dirs = [original_cwd]
+                agent_id = f"{name}@{team_name}"
+                _agent_temp_dirs[agent_id] = effective_cwd
+
             cmd = build_spawn_command(
-                member, claude_binary, lead_session_id, permissions
+                member,
+                claude_binary,
+                lead_session_id,
+                permissions,
+                skills=skills,
+                extra_add_dirs=extra_add_dirs,
+                effective_cwd=effective_cwd,
             )
 
         result = subprocess.run(
@@ -347,6 +412,8 @@ def spawn_teammate(
                 opencode_client.delete_session(opencode_server_url, opencode_session_id)
             except Exception:
                 pass
+        # Clean up temp MCP config directory on failure
+        cleanup_agent_temp_dir(f"{name}@{team_name}")
         raise
 
     member.tmux_pane_id = pane_id

@@ -5,19 +5,25 @@ from pathlib import Path
 import pytest
 
 from claude_teams.presets import (
+    MCPServerConfig,
     Permission,
+    SkillsConfig,
     SupervisorSpec,
     TeammateSpec,
     TeamPreset,
     _glob_covers,
     _parse_tool_pattern,
     _pattern_covers,
+    build_mcp_config_json,
+    build_opencode_mcp_config,
     build_opencode_permissions,
     build_permission_flags,
+    build_skill_flags,
     build_supervisor_prompt,
     discover_and_load,
     discover_preset_path,
     load_preset,
+    resolve_agent_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -477,3 +483,246 @@ class TestDiscoverAndLoad:
         result = discover_and_load(tmp_path)
         assert result is not None
         assert result.name == "found"
+
+
+# ---------------------------------------------------------------------------
+# MCPServerConfig
+# ---------------------------------------------------------------------------
+
+
+class TestMCPServerConfig:
+    def test_basic_creation(self):
+        config = MCPServerConfig(command="npx", args=["-y", "server"])
+        assert config.command == "npx"
+        assert config.args == ["-y", "server"]
+        assert config.env == {}
+
+    def test_with_env(self):
+        config = MCPServerConfig(command="npx", args=[], env={"KEY": "VAL"})
+        assert config.env == {"KEY": "VAL"}
+
+    def test_roundtrip(self):
+        config = MCPServerConfig(command="uvx", args=["--from", "pkg", "srv"])
+        data = config.model_dump()
+        restored = MCPServerConfig.model_validate(data)
+        assert restored == config
+
+
+# ---------------------------------------------------------------------------
+# SkillsConfig
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsConfig:
+    def test_default_empty(self):
+        config = SkillsConfig()
+        assert config.add_dirs == []
+
+    def test_with_dirs(self):
+        config = SkillsConfig(addDirs=["/path/a", "/path/b"])
+        assert config.add_dirs == ["/path/a", "/path/b"]
+
+    def test_python_field_name(self):
+        config = SkillsConfig(add_dirs=["/path"])
+        assert config.add_dirs == ["/path"]
+
+    def test_camel_case_alias_roundtrip(self):
+        config = SkillsConfig(addDirs=["/path"])
+        data = config.model_dump(by_alias=True)
+        assert "addDirs" in data
+        restored = SkillsConfig.model_validate(data)
+        assert restored == config
+
+
+# ---------------------------------------------------------------------------
+# Model fields on specs
+# ---------------------------------------------------------------------------
+
+
+class TestSpecSkillsAndMcpFields:
+    def test_teammate_defaults_empty(self):
+        spec = TeammateSpec(name="dev", role="Dev", prompt="code")
+        assert spec.skills.add_dirs == []
+        assert spec.mcp_servers == {}
+
+    def test_teammate_with_skills_and_mcp(self):
+        spec = TeammateSpec(
+            name="dev",
+            role="Dev",
+            prompt="code",
+            skills=SkillsConfig(addDirs=["/skills"]),
+            mcp_servers={"gh": MCPServerConfig(command="npx", args=["gh"])},
+        )
+        assert spec.skills.add_dirs == ["/skills"]
+        assert "gh" in spec.mcp_servers
+
+    def test_supervisor_defaults_empty(self):
+        sup = SupervisorSpec()
+        assert sup.skills.add_dirs == []
+        assert sup.mcp_servers == {}
+
+    def test_supervisor_with_skills(self):
+        sup = SupervisorSpec(
+            skills=SkillsConfig(addDirs=["/sup-skills"]),
+            mcp_servers={"fs": MCPServerConfig(command="npx", args=["fs"])},
+        )
+        assert sup.skills.add_dirs == ["/sup-skills"]
+        assert "fs" in sup.mcp_servers
+
+    def test_team_preset_defaults_empty(self):
+        preset = TeamPreset(name="t", teammates=[])
+        assert preset.skills.add_dirs == []
+        assert preset.mcp_servers == {}
+
+    def test_team_preset_with_skills_and_mcp(self):
+        preset = TeamPreset(
+            name="t",
+            teammates=[],
+            skills=SkillsConfig(addDirs=["/shared"]),
+            mcp_servers={"db": MCPServerConfig(command="npx", args=["db"])},
+        )
+        assert preset.skills.add_dirs == ["/shared"]
+        assert "db" in preset.mcp_servers
+
+
+# ---------------------------------------------------------------------------
+# resolve_agent_config
+# ---------------------------------------------------------------------------
+
+
+class TestResolveAgentConfig:
+    def test_merge_add_dirs_deduplicates(self):
+        preset = TeamPreset(
+            name="t",
+            teammates=[],
+            skills=SkillsConfig(addDirs=["/shared", "/common"]),
+        )
+        agent_skills = SkillsConfig(addDirs=["/agent", "/shared"])
+        merged_skills, _ = resolve_agent_config(preset, agent_skills, {})
+        assert merged_skills.add_dirs == ["/shared", "/common", "/agent"]
+
+    def test_merge_mcp_servers_agent_overrides_team(self):
+        preset = TeamPreset(
+            name="t",
+            teammates=[],
+            mcp_servers={
+                "gh": MCPServerConfig(command="npx", args=["gh-v1"]),
+                "fs": MCPServerConfig(command="npx", args=["fs-v1"]),
+            },
+        )
+        agent_mcp = {
+            "gh": MCPServerConfig(command="npx", args=["gh-v2"]),
+        }
+        _, merged_mcp = resolve_agent_config(preset, SkillsConfig(), agent_mcp)
+        assert merged_mcp["gh"].args == ["gh-v2"]
+        assert merged_mcp["fs"].args == ["fs-v1"]
+
+    def test_empty_configs_resolve_to_empty(self):
+        preset = TeamPreset(name="t", teammates=[])
+        skills, mcp = resolve_agent_config(preset, SkillsConfig(), {})
+        assert skills.add_dirs == []
+        assert mcp == {}
+
+    def test_team_only_skills(self):
+        preset = TeamPreset(
+            name="t",
+            teammates=[],
+            skills=SkillsConfig(addDirs=["/team-only"]),
+        )
+        skills, _ = resolve_agent_config(preset, SkillsConfig(), {})
+        assert skills.add_dirs == ["/team-only"]
+
+    def test_agent_only_mcp(self):
+        preset = TeamPreset(name="t", teammates=[])
+        agent_mcp = {"test": MCPServerConfig(command="echo", args=["hi"])}
+        _, mcp = resolve_agent_config(preset, SkillsConfig(), agent_mcp)
+        assert "test" in mcp
+        assert mcp["test"].command == "echo"
+
+
+# ---------------------------------------------------------------------------
+# build_skill_flags
+# ---------------------------------------------------------------------------
+
+
+class TestBuildSkillFlags:
+    def test_empty_skills_yields_no_flags(self):
+        assert build_skill_flags(SkillsConfig()) == []
+
+    def test_single_dir(self):
+        flags = build_skill_flags(SkillsConfig(addDirs=["/path/to/skills"]))
+        assert flags == ["--add-dir", "/path/to/skills"]
+
+    def test_multiple_dirs(self):
+        flags = build_skill_flags(SkillsConfig(addDirs=["/a", "/b"]))
+        assert flags == ["--add-dir", "/a", "--add-dir", "/b"]
+
+
+# ---------------------------------------------------------------------------
+# build_mcp_config_json
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMcpConfigJson:
+    def test_basic_server(self):
+        result = build_mcp_config_json(
+            {
+                "test": MCPServerConfig(command="npx", args=["-y", "server"]),
+            }
+        )
+        assert result == {
+            "mcpServers": {
+                "test": {"command": "npx", "args": ["-y", "server"]},
+            }
+        }
+
+    def test_server_with_env(self):
+        result = build_mcp_config_json(
+            {
+                "test": MCPServerConfig(command="npx", args=[], env={"KEY": "VAL"}),
+            }
+        )
+        assert result["mcpServers"]["test"]["env"] == {"KEY": "VAL"}
+
+    def test_empty_servers(self):
+        assert build_mcp_config_json({}) == {"mcpServers": {}}
+
+    def test_env_not_included_when_empty(self):
+        result = build_mcp_config_json(
+            {
+                "test": MCPServerConfig(command="npx", args=[]),
+            }
+        )
+        assert "env" not in result["mcpServers"]["test"]
+
+
+# ---------------------------------------------------------------------------
+# build_opencode_mcp_config
+# ---------------------------------------------------------------------------
+
+
+class TestBuildOpencodeMcpConfig:
+    def test_basic_server(self):
+        result = build_opencode_mcp_config(
+            {
+                "gh": MCPServerConfig(command="npx", args=["-y", "gh-server"]),
+            }
+        )
+        assert result == {
+            "gh": {
+                "type": "local",
+                "command": ["npx", "-y", "gh-server"],
+                "enabled": True,
+            }
+        }
+
+    def test_server_with_env(self):
+        result = build_opencode_mcp_config(
+            {
+                "gh": MCPServerConfig(command="npx", args=[], env={"TOKEN": "abc"}),
+            }
+        )
+        assert result["gh"]["env"] == {"TOKEN": "abc"}
+
+    def test_empty_servers(self):
+        assert build_opencode_mcp_config({}) == {}
