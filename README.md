@@ -58,6 +58,7 @@ OpenCode (`~/.config/opencode/opencode.json`):
 | `OPENCODE_SERVER_URL` | OpenCode HTTP API URL (required for opencode teammates) | *(unset)* |
 | `USE_TMUX_WINDOWS` | Spawn teammates in tmux windows instead of panes | *(unset)* |
 | `CLAUDE_TEAM_PRESET` | Path to a team preset file (see [Preset Teams](#preset-teams)) | *(unset)* |
+| `CLAUDE_TEAMS_DANGEROUSLY_SKIP_PERMISSIONS` | Pass `--dangerously-skip-permissions` to spawned Claude Code teammates | *(unset)* |
 
 Without `CLAUDE_TEAMS_BACKENDS`, the server auto-detects the connecting client and enables only its backend. Set it explicitly to enable multiple backends:
 
@@ -212,7 +213,7 @@ The supervisor is spawned with hardcoded read-only permissions (`Read`, `Grep`, 
 
 ## Architecture
 
-- **Spawning**: Teammates launch in tmux panes (default) or windows (`USE_TMUX_WINDOWS`). Each gets a unique agent ID, color, and system prompt with MCP tool instructions. Claude Code agents receive `--dangerously-skip-permissions` with tool restrictions enforced via `--allowedTools`/`--disallowedTools`.
+- **Spawning**: Teammates launch in tmux panes (default) or windows (`USE_TMUX_WINDOWS`). Each gets a unique agent ID, color, and system prompt with MCP tool instructions. Claude Code agents optionally receive `--dangerously-skip-permissions` (when `CLAUDE_TEAMS_DANGEROUSLY_SKIP_PERMISSIONS` is set) with tool restrictions enforced via `--allowedTools`/`--disallowedTools`.
 - **Messaging**: JSON inboxes at `~/.claude/teams/<team>/inboxes/`. Lead messages anyone; teammates message only lead. Responses are truncated at 25,000 characters to prevent oversized payloads.
 - **Tasks**: JSON files at `~/.claude/tasks/<team>/`. Status tracking, ownership, dependency management with cycle detection, and pagination.
 - **Orchestrator**: Manages preset-based team lifecycle — spawns agents, monitors health via tmux pane checks and OpenCode session status, enforces worker timeouts, and handles graceful/emergency shutdown.
@@ -238,7 +239,7 @@ The supervisor is spawned with hardcoded read-only permissions (`Read`, `Grep`, 
 # Install dependencies
 uv sync --group dev
 
-# Run tests (308+ tests, ~79% coverage)
+# Run tests (323 tests, ~79% coverage)
 uv run pytest
 
 # Lint
