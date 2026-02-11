@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_teams.models import LeadMember, TeamConfig, TeammateMember
+from claude_teams.models import LeadMember, TeammateMember
 from claude_teams.teams import (
     add_member,
     create_team,
@@ -34,8 +34,10 @@ def _make_teammate(name: str, team_name: str) -> TeammateMember:
 
 
 class TestCreateTeam:
-    def test_create_team_produces_correct_directory_structure(self, tmp_claude_dir: Path) -> None:
-        result = create_team("alpha", "sess-1", base_dir=tmp_claude_dir)
+    def test_create_team_produces_correct_directory_structure(
+        self, tmp_claude_dir: Path
+    ) -> None:
+        create_team("alpha", "sess-1", base_dir=tmp_claude_dir)
 
         assert (tmp_claude_dir / "teams" / "alpha").is_dir()
         assert (tmp_claude_dir / "tasks" / "alpha").is_dir()
@@ -45,7 +47,9 @@ class TestCreateTeam:
     def test_create_team_config_has_correct_schema(self, tmp_claude_dir: Path) -> None:
         create_team("beta", "sess-42", description="test team", base_dir=tmp_claude_dir)
 
-        raw = json.loads((tmp_claude_dir / "teams" / "beta" / "config.json").read_text())
+        raw = json.loads(
+            (tmp_claude_dir / "teams" / "beta" / "config.json").read_text()
+        )
 
         assert raw["name"] == "beta"
         assert raw["description"] == "test team"
@@ -59,7 +63,9 @@ class TestCreateTeam:
     def test_create_team_lead_member_shape(self, tmp_claude_dir: Path) -> None:
         create_team("gamma", "sess-7", base_dir=tmp_claude_dir)
 
-        raw = json.loads((tmp_claude_dir / "teams" / "gamma" / "config.json").read_text())
+        raw = json.loads(
+            (tmp_claude_dir / "teams" / "gamma" / "config.json").read_text()
+        )
         lead = raw["members"][0]
 
         assert lead["agentId"] == "team-lead@gamma"
@@ -73,7 +79,9 @@ class TestCreateTeam:
             with pytest.raises(ValueError):
                 create_team(bad_name, "sess-x", base_dir=tmp_claude_dir)
 
-    def test_should_reject_name_exceeding_max_length(self, tmp_claude_dir: Path) -> None:
+    def test_should_reject_name_exceeding_max_length(
+        self, tmp_claude_dir: Path
+    ) -> None:
         with pytest.raises(ValueError, match="too long"):
             create_team("a" * 65, "sess-x", base_dir=tmp_claude_dir)
 
@@ -143,7 +151,9 @@ class TestDuplicateMember:
 
 
 class TestWriteConfig:
-    def test_should_cleanup_temp_file_when_replace_fails(self, tmp_claude_dir: Path) -> None:
+    def test_should_cleanup_temp_file_when_replace_fails(
+        self, tmp_claude_dir: Path
+    ) -> None:
         create_team("atomic", "sess-1", base_dir=tmp_claude_dir)
         config = read_config("atomic", base_dir=tmp_claude_dir)
         config.description = "updated"
@@ -161,11 +171,15 @@ class TestWriteConfig:
 class TestTeamExists:
     def test_should_return_true_for_existing_team(self, tmp_claude_dir: Path) -> None:
         from claude_teams.teams import team_exists
+
         create_team("exists", "sess-1", base_dir=tmp_claude_dir)
         assert team_exists("exists", base_dir=tmp_claude_dir) is True
 
-    def test_should_return_false_for_nonexistent_team(self, tmp_claude_dir: Path) -> None:
+    def test_should_return_false_for_nonexistent_team(
+        self, tmp_claude_dir: Path
+    ) -> None:
         from claude_teams.teams import team_exists
+
         assert team_exists("ghost", base_dir=tmp_claude_dir) is False
 
 
@@ -186,7 +200,9 @@ class TestRemoveMemberGuard:
 
 class TestReadConfig:
     def test_read_config_round_trip(self, tmp_claude_dir: Path) -> None:
-        result = create_team("roundtrip", "sess-99", description="rt test", base_dir=tmp_claude_dir)
+        create_team(
+            "roundtrip", "sess-99", description="rt test", base_dir=tmp_claude_dir
+        )
         cfg = read_config("roundtrip", base_dir=tmp_claude_dir)
 
         assert cfg.name == "roundtrip"

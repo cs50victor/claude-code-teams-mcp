@@ -3,9 +3,7 @@
 Calls the same functions the MCP server tools delegate to,
 exercising identical validation and I/O code paths.
 """
-import json
 import tempfile
-import traceback
 from pathlib import Path
 
 from claude_teams import teams
@@ -137,6 +135,7 @@ else:
     print("  Nothing to clean up.")
 
 import shutil
+
 shutil.rmtree(tmp_base, ignore_errors=True)
 print(f"  Removed temp dir: {tmp_base}")
 

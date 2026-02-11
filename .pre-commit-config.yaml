@@ -1,0 +1,61 @@
+exclude: |
+  (?x)^(
+      .*cache.*/.*|
+      .*venv.*/.*|
+      htmlcov/.*|
+      \.coverage.*|
+      dist/.*|
+      build/.*|
+      \.git/.*|
+      \.mypy_cache/.*|
+      \.ruff_cache/.*|
+      \.eggs/.*|
+      \.env.*|
+  )$
+fail_fast: true
+default_language_version:
+  python: python3.12
+
+repos:
+  # ----------------------------- Code Quality ----------------------------- #
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.4
+    hooks:
+      - id: ruff
+        name: "Lint with Ruff"
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff
+        name: "Sort imports"
+        args: [--fix, --select, I]
+      - id: ruff-format
+        name: "Format with Ruff"
+
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.24.1
+    hooks:
+      - id: validate-pyproject
+        name: "Validate pyproject.toml"
+
+  # ----------------------------- Filesystem ------------------------------- #
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-ast
+      - id: debug-statements
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+
+  # ----------------------------- Spelling --------------------------------- #
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.43.4
+    hooks:
+      - id: typos
+        name: "Check for typos"
+        args: [--write-changes]
