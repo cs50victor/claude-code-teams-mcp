@@ -146,6 +146,11 @@ def assign_color(team_name: str, base_dir: Path | None = None) -> str:
     return COLOR_PALETTE[count % len(COLOR_PALETTE)]
 
 
+def skip_permissions() -> bool:
+    """Return True when spawned teammates should skip permission prompts."""
+    return os.environ.get("CLAUDE_TEAMS_DANGEROUSLY_SKIP_PERMISSIONS") is not None
+
+
 def _build_agent_system_prompt(name: str, team_name: str) -> str:
     """Build the system prompt addition for a team agent."""
     return _AGENT_SYSTEM_PROMPT.format(name=name, team_name=team_name)
@@ -170,11 +175,12 @@ def build_spawn_command(
         f"--parent-session-id {shlex.quote(lead_session_id)} "
         f"--agent-type {shlex.quote(member.agent_type)} "
         f"--model {shlex.quote(member.model)} "
-        f"--dangerously-skip-permissions "
         f"--append-system-prompt {shlex.quote(system_prompt)}"
     )
     if member.plan_mode_required:
         cmd += " --plan-mode-required"
+    if skip_permissions():
+        cmd += " --dangerously-skip-permissions"
     if permissions is not None:
         for flag in build_permission_flags(permissions):
             cmd += f" {shlex.quote(flag)}"
