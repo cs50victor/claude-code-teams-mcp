@@ -84,7 +84,6 @@ Without `CLAUDE_TEAMS_BACKENDS`, the server auto-detects the connecting client a
 | `spawn_teammate` | Spawn a teammate in tmux |
 | `send_message` | Send DMs, broadcasts (lead only), shutdown/plan responses |
 | `read_inbox` | Read messages from an agent's inbox |
-| `poll_inbox` | Long-poll inbox for new messages (up to 30s) |
 | `read_config` | Read team config and member list |
 | `task_create` | Create a task (auto-incrementing ID) |
 | `task_update` | Update task status, owner, dependencies, or metadata |

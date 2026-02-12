@@ -11,7 +11,6 @@ from claude_teams import messaging, tasks, teams
 from claude_teams.models import TeammateMember
 from claude_teams.server import (
     _build_check_teammate_description,
-    _build_poll_inbox_description,
     _build_read_inbox_description,
     _build_spawn_description,
     _parse_backends_env,
@@ -683,88 +682,6 @@ class TestErrorWrapping:
         assert "does not exist" in result.content[0].text.lower()
 
 
-class TestPollInbox:
-    async def test_should_return_empty_on_timeout(self, client: Client):
-        await client.call_tool("team_create", {"team_name": "t6"})
-        result = _data(
-            await client.call_tool(
-                "poll_inbox",
-                {"team_name": "t6", "agent_name": "nobody", "timeout_ms": 100},
-            )
-        )
-        assert result == []
-
-    async def test_should_return_messages_when_present(self, client: Client):
-        await client.call_tool("team_create", {"team_name": "t6b"})
-        teams.add_member("t6b", _make_teammate("alice", "t6b"))
-        await client.call_tool(
-            "send_message",
-            {
-                "team_name": "t6b",
-                "type": "message",
-                "recipient": "alice",
-                "content": "wake up",
-                "summary": "nudge",
-            },
-        )
-        result = _data(
-            await client.call_tool(
-                "poll_inbox",
-                {"team_name": "t6b", "agent_name": "alice", "timeout_ms": 100},
-            )
-        )
-        assert len(result) == 1
-        assert result[0]["text"].startswith("wake up")
-        assert "sent from team-lead" in result[0]["text"]
-
-    async def test_should_return_existing_messages_with_zero_timeout(
-        self, client: Client
-    ):
-        await client.call_tool("team_create", {"team_name": "t6c"})
-        teams.add_member("t6c", _make_teammate("bob", "t6c"))
-        await client.call_tool(
-            "send_message",
-            {
-                "team_name": "t6c",
-                "type": "message",
-                "recipient": "bob",
-                "content": "instant",
-                "summary": "fast",
-            },
-        )
-        result = _data(
-            await client.call_tool(
-                "poll_inbox",
-                {"team_name": "t6c", "agent_name": "bob", "timeout_ms": 0},
-            )
-        )
-        assert len(result) == 1
-        assert result[0]["text"].startswith("instant")
-        assert "sent from team-lead" in result[0]["text"]
-
-    async def test_should_return_immediately_when_lead_session_known(
-        self, client: Client, monkeypatch
-    ):
-        """poll_inbox returns [] immediately when lead_opencode_session_id is set."""
-        from claude_teams.server import _lifespan_state
-        _lifespan_state["lead_opencode_session_id"] = "ses_lead_123"
-        try:
-            await client.call_tool("team_create", {"team_name": "t6_fast"})
-            import time
-            start = time.monotonic()
-            result = _data(
-                await client.call_tool(
-                    "poll_inbox",
-                    {"team_name": "t6_fast", "agent_name": "nobody", "timeout_ms": 5000},
-                )
-            )
-            elapsed = time.monotonic() - start
-            assert result == []
-            assert elapsed < 1.0, f"poll_inbox blocked for {elapsed:.1f}s instead of returning immediately"
-        finally:
-            _lifespan_state["lead_opencode_session_id"] = None
-
-
 class TestTeamDeleteErrorWrapping:
     async def test_should_reject_delete_with_active_members(self, client: Client):
         await client.call_tool("team_create", {"team_name": "td1"})
@@ -1270,11 +1187,17 @@ class TestCheckTeammate:
             "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
         )
         await client.call_tool("team_create", {"team_name": "tct_live"})
-        teams.add_member("tct_live", _make_teammate("worker", "tct_live", pane_id="%10"))
+        teams.add_member(
+            "tct_live", _make_teammate("worker", "tct_live", pane_id="%10")
+        )
         result = _data(
             await client.call_tool(
                 "check_teammate",
-                {"team_name": "tct_live", "agent_name": "worker", "include_output": True},
+                {
+                    "team_name": "tct_live",
+                    "agent_name": "worker",
+                    "include_output": True,
+                },
             )
         )
         assert result["alive"] is True
@@ -1288,14 +1211,18 @@ class TestCheckTeammate:
             if "display-message" in cmd:
                 return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
             if "capture-pane" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "data\n", "stderr": ""})()
+                return type(
+                    "R", (), {"returncode": 0, "stdout": "data\n", "stderr": ""}
+                )()
             return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
 
         monkeypatch.setattr(
             "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
         )
         await client.call_tool("team_create", {"team_name": "tct_noout"})
-        teams.add_member("tct_noout", _make_teammate("worker", "tct_noout", pane_id="%14"))
+        teams.add_member(
+            "tct_noout", _make_teammate("worker", "tct_noout", pane_id="%14")
+        )
         result = _data(
             await client.call_tool(
                 "check_teammate",
@@ -1435,7 +1362,11 @@ class TestCheckTeammate:
         teams.add_member("tct_nmin", _make_teammate("worker", "tct_nmin", pane_id=""))
         result = await client.call_tool(
             "check_teammate",
-            {"team_name": "tct_nmin", "agent_name": "worker", "notify_after_minutes": 0},
+            {
+                "team_name": "tct_nmin",
+                "agent_name": "worker",
+                "notify_after_minutes": 0,
+            },
             raise_on_error=False,
         )
         assert result.is_error is True
@@ -1445,6 +1376,7 @@ class TestCheckTeammate:
         self, client: Client, monkeypatch
     ):
         from claude_teams.server import _lifespan_state
+
         _lifespan_state["lead_opencode_session_id"] = "ses_lead_456"
         _lifespan_state["opencode_server_url"] = "http://localhost:4096"
         pushed = []
@@ -1454,11 +1386,17 @@ class TestCheckTeammate:
         )
         try:
             await client.call_tool("team_create", {"team_name": "tct_sched"})
-            teams.add_member("tct_sched", _make_teammate("worker", "tct_sched", pane_id=""))
+            teams.add_member(
+                "tct_sched", _make_teammate("worker", "tct_sched", pane_id="")
+            )
             result = _data(
                 await client.call_tool(
                     "check_teammate",
-                    {"team_name": "tct_sched", "agent_name": "worker", "notify_after_minutes": 1},
+                    {
+                        "team_name": "tct_sched",
+                        "agent_name": "worker",
+                        "notify_after_minutes": 1,
+                    },
                 )
             )
             assert result["notification_scheduled"] is True
@@ -1471,16 +1409,24 @@ class TestCheckTeammate:
         self, client: Client
     ):
         await client.call_tool("team_create", {"team_name": "tct_nopush"})
-        teams.add_member("tct_nopush", _make_teammate("worker", "tct_nopush", pane_id=""))
+        teams.add_member(
+            "tct_nopush", _make_teammate("worker", "tct_nopush", pane_id="")
+        )
         result = await client.call_tool(
             "check_teammate",
-            {"team_name": "tct_nopush", "agent_name": "worker", "notify_after_minutes": 5},
+            {
+                "team_name": "tct_nopush",
+                "agent_name": "worker",
+                "notify_after_minutes": 5,
+            },
             raise_on_error=False,
         )
         assert result.is_error is True
         assert "not supported" in result.content[0].text.lower()
 
-    async def test_should_skip_messages_when_include_messages_false(self, client: Client):
+    async def test_should_skip_messages_when_include_messages_false(
+        self, client: Client
+    ):
         await client.call_tool("team_create", {"team_name": "tct_nomsg"})
         teams.add_member("tct_nomsg", _make_teammate("worker", "tct_nomsg", pane_id=""))
         await client.call_tool(
@@ -1497,7 +1443,11 @@ class TestCheckTeammate:
         result = _data(
             await client.call_tool(
                 "check_teammate",
-                {"team_name": "tct_nomsg", "agent_name": "worker", "include_messages": False},
+                {
+                    "team_name": "tct_nomsg",
+                    "agent_name": "worker",
+                    "include_messages": False,
+                },
             )
         )
         assert result["pending_from"] == []
@@ -1527,6 +1477,7 @@ class TestCheckTeammateDescription:
             _build_check_teammate_description,
             _check_teammate_tool,
         )
+
         # Simulate what middleware does
         if _check_teammate_tool:
             _check_teammate_tool.description = _build_check_teammate_description(
@@ -1566,38 +1517,22 @@ class TestEnabledBackendsEnvParsing:
         assert _parse_backends_env("bogus,fake") == []
 
 
-class TestPollInboxDescription:
-    async def test_should_show_default_description_without_lead_session(self, client: Client):
-        tools = await client.list_tools()
-        poll_tool = next(t for t in tools if t.name == "poll_inbox")
-        assert "Convenience tool" in poll_tool.description
-        assert "check_teammate" not in poll_tool.description
-
-    async def test_should_recommend_check_teammate_for_lead(self, client: Client):
-        from claude_teams.server import _poll_inbox_tool
-        if _poll_inbox_tool:
-            _poll_inbox_tool.description = _build_poll_inbox_description(is_lead_session=True)
-        try:
-            tools = await client.list_tools()
-            poll_tool = next(t for t in tools if t.name == "poll_inbox")
-            assert "check_teammate" in poll_tool.description
-            assert "prefer" in poll_tool.description.lower()
-        finally:
-            if _poll_inbox_tool:
-                _poll_inbox_tool.description = _build_poll_inbox_description(is_lead_session=False)
-
-
 class TestReadInboxDescription:
-    async def test_should_show_default_description_without_lead_session(self, client: Client):
+    async def test_should_show_default_description_without_lead_session(
+        self, client: Client
+    ):
         tools = await client.list_tools()
         ri_tool = next(t for t in tools if t.name == "read_inbox")
-        assert "unread_only" in ri_tool.description
+        assert "Returns unread messages by default" in ri_tool.description
         assert "check_teammate" not in ri_tool.description
 
     async def test_should_recommend_check_teammate_for_lead(self, client: Client):
         from claude_teams.server import _read_inbox_tool
+
         if _read_inbox_tool:
-            _read_inbox_tool.description = _build_read_inbox_description(is_lead_session=True)
+            _read_inbox_tool.description = _build_read_inbox_description(
+                is_lead_session=True
+            )
         try:
             tools = await client.list_tools()
             ri_tool = next(t for t in tools if t.name == "read_inbox")
@@ -1605,6 +1540,6 @@ class TestReadInboxDescription:
             assert "prefer" in ri_tool.description.lower()
         finally:
             if _read_inbox_tool:
-                _read_inbox_tool.description = _build_read_inbox_description(is_lead_session=False)
-
-
+                _read_inbox_tool.description = _build_read_inbox_description(
+                    is_lead_session=False
+                )

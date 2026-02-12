@@ -52,12 +52,10 @@ KNOWN_CLIENTS: dict[str, str] = {
 _lifespan_state: dict[str, Any] = {}
 _spawn_tool: Any = None
 _check_teammate_tool: Any = None
-_poll_inbox_tool: Any = None
 _read_inbox_tool: Any = None
 
 
 _VALID_BACKENDS = frozenset(KNOWN_CLIENTS.values())
-
 
 
 def _parse_backends_env(raw: str) -> list[str]:
@@ -135,25 +133,6 @@ def _build_check_teammate_description(push_available: bool) -> str:
     )
 
 
-_POLL_INBOX_BASE_DESCRIPTION = (
-    "Poll an agent's inbox for new unread messages, waiting up to timeout_ms. "
-    "Returns unread messages and marks them as read."
-)
-
-
-def _build_poll_inbox_description(is_lead_session: bool) -> str:
-    if is_lead_session:
-        return (
-            _POLL_INBOX_BASE_DESCRIPTION
-            + " NOTE: As team-lead, prefer check_teammate over poll_inbox."
-            " check_teammate is non-blocking and provides richer status."
-        )
-    return (
-        _POLL_INBOX_BASE_DESCRIPTION
-        + " Convenience tool for MCP clients that cannot watch the filesystem."
-    )
-
-
 _READ_INBOX_BASE_DESCRIPTION = (
     "Read messages from an agent's inbox. Returns unread messages by default "
     "and marks them as read."
@@ -168,10 +147,7 @@ def _build_read_inbox_description(is_lead_session: bool) -> str:
             " from a specific teammate. check_teammate filters by sender"
             " and provides richer status."
         )
-    return (
-        _READ_INBOX_BASE_DESCRIPTION
-        + " Set unread_only=False to include previously read messages."
-    )
+    return _READ_INBOX_BASE_DESCRIPTION
 
 
 def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
@@ -230,7 +206,7 @@ def _discover_lead_opencode_session(server_url: str) -> str | None:
 
 @lifespan
 async def app_lifespan(server):
-    global _spawn_tool, _check_teammate_tool, _poll_inbox_tool, _read_inbox_tool
+    global _spawn_tool, _check_teammate_tool, _read_inbox_tool
 
     claude_binary = discover_harness_binary("claude")
     opencode_binary = discover_harness_binary("opencode")
@@ -284,10 +260,6 @@ async def app_lifespan(server):
     _check_teammate_tool = check_tool
     # Push is never available at lifespan time (lead session discovered in middleware)
     check_tool.description = _build_check_teammate_description(push_available=False)
-
-    poll_tool = await mcp.get_tool("poll_inbox")
-    _poll_inbox_tool = poll_tool
-    poll_tool.description = _build_poll_inbox_description(is_lead_session=False)
 
     ri_tool = await mcp.get_tool("read_inbox")
     _read_inbox_tool = ri_tool
@@ -348,10 +320,7 @@ class HarnessDetectionMiddleware(Middleware):
         _lifespan_state["client_version"] = client_version
 
         # Discover lead's OpenCode session for push notifications
-        if (
-            client_name == "opencode"
-            and _lifespan_state.get("opencode_server_url")
-        ):
+        if client_name == "opencode" and _lifespan_state.get("opencode_server_url"):
             lead_session = _discover_lead_opencode_session(
                 _lifespan_state["opencode_server_url"]
             )
@@ -367,10 +336,8 @@ class HarnessDetectionMiddleware(Middleware):
                 push_available
             )
 
-        # Update poll_inbox and read_inbox descriptions for lead sessions
+        # Update read_inbox description for lead sessions
         is_lead = bool(_lifespan_state.get("lead_opencode_session_id"))
-        if _poll_inbox_tool:
-            _poll_inbox_tool.description = _build_poll_inbox_description(is_lead)
         if _read_inbox_tool:
             _read_inbox_tool.description = _build_read_inbox_description(is_lead)
 
@@ -891,36 +858,6 @@ def force_kill_teammate(team_name: str, agent_name: str, ctx: Context) -> dict:
 
 
 @mcp.tool
-async def poll_inbox(
-    team_name: str,
-    agent_name: str,
-    timeout_ms: int = 30000,
-) -> list[dict]:
-    """Poll for inbox messages. Description is dynamically updated at startup."""
-    msgs = messaging.read_inbox(
-        team_name, agent_name, unread_only=True, mark_as_read=True
-    )
-    if msgs:
-        return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
-
-    # When lead's OpenCode session is known, return immediately.
-    # Messages are pushed to the lead's session via send_prompt_async,
-    # so blocking here is unnecessary and harmful (single-threaded agent).
-    if _lifespan_state.get("lead_opencode_session_id"):
-        return []
-
-    deadline = time.time() + timeout_ms / 1000.0
-    while time.time() < deadline:
-        await asyncio.sleep(0.5)
-        msgs = messaging.read_inbox(
-            team_name, agent_name, unread_only=True, mark_as_read=True
-        )
-        if msgs:
-            return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
-    return []
-
-
-@mcp.tool
 def process_shutdown_approved(team_name: str, agent_name: str, ctx: Context) -> dict:
     """Process a teammate's shutdown by removing them from config and resetting
     their tasks. Call this after confirming shutdown_approved in the lead inbox."""
@@ -981,9 +918,7 @@ async def check_teammate(
             mark_as_read=True,
             limit=max_messages,
         )
-        pending_from = [
-            m.model_dump(by_alias=True, exclude_none=True) for m in msgs
-        ]
+        pending_from = [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
 
     # 2. Check teammate's unread count (messages they haven't read)
     try:
@@ -1019,9 +954,7 @@ async def check_teammate(
     notification_scheduled = False
 
     if notify_after_minutes is not None and not push_available:
-        raise ToolError(
-            "notify_after_minutes is not supported by the current harness."
-        )
+        raise ToolError("notify_after_minutes is not supported by the current harness.")
 
     if notify_after_minutes is not None and push_available:
         delay_s = notify_after_minutes * 60
@@ -1038,15 +971,15 @@ async def check_teammate(
             except FileNotFoundError:
                 return
             still_exists = any(
-                isinstance(m, TeammateMember) and m.name == t_agent
-                for m in cfg.members
+                isinstance(m, TeammateMember) and m.name == t_agent for m in cfg.members
             )
             if not still_exists:
                 return
             # Compute minimal status
             try:
                 pending = messaging.read_inbox_filtered(
-                    t_team, "team-lead",
+                    t_team,
+                    "team-lead",
                     sender_filter=t_agent,
                     unread_only=True,
                     mark_as_read=False,
@@ -1062,9 +995,7 @@ async def check_teammate(
             try:
                 _push_to_lead(oc_url, lead_sid, text)
             except Exception:
-                logger.warning(
-                    "check_teammate reminder push failed for %s", t_agent
-                )
+                logger.warning("check_teammate reminder push failed for %s", t_agent)
 
         asyncio.create_task(_notify_task())
         notification_scheduled = True
