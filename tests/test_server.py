@@ -299,7 +299,8 @@ class TestWiring:
             )
         )
         assert len(inbox) == 1
-        assert inbox[0]["text"] == "hello bob"
+        assert inbox[0]["text"].startswith("hello bob")
+        assert "-- sent from team-lead" in inbox[0]["text"]
         assert inbox[0]["from"] == "team-lead"
 
     async def test_should_round_trip_teammate_message_to_team_lead_with_sender(
@@ -327,7 +328,8 @@ class TestWiring:
         )
         assert len(inbox) == 1
         assert inbox[0]["from"] == "worker"
-        assert inbox[0]["text"] == "done"
+        assert inbox[0]["text"].startswith("done")
+        assert "-- sent from worker" in inbox[0]["text"]
 
 
 class TestTeamDeleteClearsSession:
@@ -703,7 +705,8 @@ class TestPollInbox:
             )
         )
         assert len(result) == 1
-        assert result[0]["text"] == "wake up"
+        assert result[0]["text"].startswith("wake up")
+        assert "-- sent from team-lead" in result[0]["text"]
 
     async def test_should_return_existing_messages_with_zero_timeout(
         self, client: Client
@@ -727,7 +730,8 @@ class TestPollInbox:
             )
         )
         assert len(result) == 1
-        assert result[0]["text"] == "instant"
+        assert result[0]["text"].startswith("instant")
+        assert "-- sent from team-lead" in result[0]["text"]
 
 
 class TestTeamDeleteErrorWrapping:

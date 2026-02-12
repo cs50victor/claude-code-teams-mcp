@@ -405,6 +405,7 @@ def send_message(
                 target_color = m.color
                 target_member = m
                 break
+        content = f"{content}\n\n-- sent from {sender} (remember to use your <send_message> tool to respond to me)"
         messaging.send_plain_message(
             team_name,
             sender,
@@ -422,8 +423,6 @@ def send_message(
                 "sender": sender,
                 "target": recipient,
                 "targetColor": target_color,
-                "summary": summary,
-                "content": content,
             },
         ).model_dump(exclude_none=True)
 
@@ -433,6 +432,7 @@ def send_message(
         if not summary:
             raise ToolError("Broadcast summary must not be empty")
         config = teams.read_config(team_name)
+        content = f"{content}\n\n-- sent from {sender} (remember to use your <send_message> tool to respond to me)"
         count = 0
         for m in config.members:
             if isinstance(m, TeammateMember):
@@ -643,11 +643,11 @@ def task_get(team_name: str, task_id: str) -> dict:
 def read_inbox(
     team_name: str,
     agent_name: str,
-    unread_only: bool = False,
+    unread_only: bool = True,
     mark_as_read: bool = True,
 ) -> list[dict]:
-    """Read messages from an agent's inbox. Returns all messages by default.
-    Set unread_only=True to get only unprocessed messages."""
+    """Read unread messages from an agent's inbox and mark them as read.
+    Set unread_only=False to include previously read messages."""
     try:
         config = teams.read_config(team_name)
     except FileNotFoundError:
