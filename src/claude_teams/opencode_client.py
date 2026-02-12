@@ -163,3 +163,37 @@ def get_session_status(server_url: str, session_id: str) -> str:
     except json.JSONDecodeError:
         raise OpenCodeAPIError("Opencode returned invalid JSON from /session/status")
     return data.get(session_id, "unknown")
+
+
+def list_active_sessions(server_url: str) -> dict:
+    """Return mapping of session_id -> status from GET /session/status.
+
+    Only returns currently active/busy sessions, not historical ones.
+    """
+    raw = _request("GET", f"{server_url}/session/status")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise OpenCodeAPIError("Opencode returned invalid JSON from /session/status")
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def get_session(server_url: str, session_id: str) -> dict:
+    """Return full session metadata from GET /session/{id}.
+
+    Includes id, slug, directory, title, projectID, etc.
+    """
+    raw = _request("GET", f"{server_url}/session/{session_id}")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise OpenCodeAPIError(
+            f"Opencode returned invalid JSON from /session/{session_id}"
+        )
+    if not isinstance(data, dict):
+        raise OpenCodeAPIError(
+            f"Opencode returned non-object from /session/{session_id}"
+        )
+    return data

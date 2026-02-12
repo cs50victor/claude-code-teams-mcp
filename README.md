@@ -23,7 +23,7 @@ Claude Code (`.mcp.json`):
   "mcpServers": {
     "claude-teams": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"]
+      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.1", "claude-teams"]
     }
   }
 }
@@ -36,7 +36,7 @@ OpenCode (`~/.config/opencode/opencode.json`):
   "mcp": {
     "claude-teams": {
       "type": "local",
-      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"],
+      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.1", "claude-teams"],
       "enabled": true
     }
   }
@@ -65,7 +65,7 @@ Without `CLAUDE_TEAMS_BACKENDS`, the server auto-detects the connecting client a
   "mcpServers": {
     "claude-teams": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"],
+      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.1", "claude-teams"],
       "env": {
         "CLAUDE_TEAMS_BACKENDS": "claude,opencode",
         "OPENCODE_SERVER_URL": "http://localhost:4096"
@@ -84,7 +84,6 @@ Without `CLAUDE_TEAMS_BACKENDS`, the server auto-detects the connecting client a
 | `spawn_teammate` | Spawn a teammate in tmux |
 | `send_message` | Send DMs, broadcasts (lead only), shutdown/plan responses |
 | `read_inbox` | Read messages from an agent's inbox |
-| `poll_inbox` | Long-poll inbox for new messages (up to 30s) |
 | `read_config` | Read team config and member list |
 | `task_create` | Create a task (auto-incrementing ID) |
 | `task_update` | Update task status, owner, dependencies, or metadata |

@@ -9,7 +9,13 @@ from fastmcp import Client
 
 from claude_teams import messaging, tasks, teams
 from claude_teams.models import TeammateMember
-from claude_teams.server import _build_spawn_description, _parse_backends_env, mcp
+from claude_teams.server import (
+    _build_check_teammate_description,
+    _build_read_inbox_description,
+    _build_spawn_description,
+    _parse_backends_env,
+    mcp,
+)
 
 
 def _make_teammate(
@@ -574,7 +580,9 @@ class TestProcessShutdownGuard:
         assert result.is_error is False
         assert killed == ["%77"]
 
-    async def test_should_kill_tmux_window_on_shutdown(self, client: Client, monkeypatch):
+    async def test_should_kill_tmux_window_on_shutdown(
+        self, client: Client, monkeypatch
+    ):
         killed = []
         monkeypatch.setattr(
             "claude_teams.server.kill_tmux_pane", lambda pane_id: killed.append(pane_id)
@@ -672,66 +680,6 @@ class TestErrorWrapping:
         )
         assert result.is_error is True
         assert "does not exist" in result.content[0].text.lower()
-
-
-class TestPollInbox:
-    async def test_should_return_empty_on_timeout(self, client: Client):
-        await client.call_tool("team_create", {"team_name": "t6"})
-        result = _data(
-            await client.call_tool(
-                "poll_inbox",
-                {"team_name": "t6", "agent_name": "nobody", "timeout_ms": 100},
-            )
-        )
-        assert result == []
-
-    async def test_should_return_messages_when_present(self, client: Client):
-        await client.call_tool("team_create", {"team_name": "t6b"})
-        teams.add_member("t6b", _make_teammate("alice", "t6b"))
-        await client.call_tool(
-            "send_message",
-            {
-                "team_name": "t6b",
-                "type": "message",
-                "recipient": "alice",
-                "content": "wake up",
-                "summary": "nudge",
-            },
-        )
-        result = _data(
-            await client.call_tool(
-                "poll_inbox",
-                {"team_name": "t6b", "agent_name": "alice", "timeout_ms": 100},
-            )
-        )
-        assert len(result) == 1
-        assert result[0]["text"].startswith("wake up")
-        assert "sent from team-lead" in result[0]["text"]
-
-    async def test_should_return_existing_messages_with_zero_timeout(
-        self, client: Client
-    ):
-        await client.call_tool("team_create", {"team_name": "t6c"})
-        teams.add_member("t6c", _make_teammate("bob", "t6c"))
-        await client.call_tool(
-            "send_message",
-            {
-                "team_name": "t6c",
-                "type": "message",
-                "recipient": "bob",
-                "content": "instant",
-                "summary": "fast",
-            },
-        )
-        result = _data(
-            await client.call_tool(
-                "poll_inbox",
-                {"team_name": "t6c", "agent_name": "bob", "timeout_ms": 0},
-            )
-        )
-        assert len(result) == 1
-        assert result[0]["text"].startswith("instant")
-        assert "sent from team-lead" in result[0]["text"]
 
 
 class TestTeamDeleteErrorWrapping:
@@ -942,7 +890,9 @@ class TestBuildSpawnDescription:
         )
         assert "opencode agents" not in desc.lower()
 
-    def test_should_hide_opencode_when_not_in_enabled_backends(self, monkeypatch) -> None:
+    def test_should_hide_opencode_when_not_in_enabled_backends(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
         desc = _build_spawn_description(
             "/bin/claude",
@@ -978,7 +928,9 @@ class TestBuildSpawnDescription:
         assert "'claude'" in desc
         assert "'opencode'" in desc
 
-    def test_should_hide_opencode_agents_when_opencode_not_enabled(self, monkeypatch) -> None:
+    def test_should_hide_opencode_agents_when_opencode_not_enabled(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
         agents = [{"name": "build", "description": "The default agent."}]
         desc = _build_spawn_description(
@@ -1169,9 +1121,7 @@ class TestOpencodeWithoutUrl:
     async def test_should_exclude_opencode_when_url_missing(
         self, opencode_env_no_url_client: Client
     ):
-        await opencode_env_no_url_client.call_tool(
-            "team_create", {"team_name": "tnou"}
-        )
+        await opencode_env_no_url_client.call_tool("team_create", {"team_name": "tnou"})
         result = await opencode_env_no_url_client.call_tool(
             "spawn_teammate",
             {
@@ -1184,6 +1134,367 @@ class TestOpencodeWithoutUrl:
         )
         assert result.is_error is True
         assert "not enabled" in result.content[0].text.lower()
+
+
+class TestCheckTeammate:
+    async def test_should_return_error_for_unknown_agent(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_unk"})
+        result = await client.call_tool(
+            "check_teammate",
+            {"team_name": "tct_unk", "agent_name": "ghost"},
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "ghost" in result.content[0].text
+
+    async def test_should_return_error_for_missing_team(self, client: Client):
+        result = await client.call_tool(
+            "check_teammate",
+            {"team_name": "nonexistent", "agent_name": "bob"},
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not found" in result.content[0].text.lower()
+
+    async def test_should_return_not_alive_for_empty_pane_id(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_empty"})
+        teams.add_member("tct_empty", _make_teammate("worker", "tct_empty", pane_id=""))
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_empty", "agent_name": "worker"},
+            )
+        )
+        assert result["alive"] is False
+        assert result["error"] == "no tmux target recorded"
+        assert result["name"] == "worker"
+
+    async def test_should_return_alive_status_from_tmux(
+        self, client: Client, monkeypatch
+    ):
+        def fake_subprocess_run(cmd, **kwargs):
+            if "display-message" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
+            if "capture-pane" in cmd:
+                return type(
+                    "R",
+                    (),
+                    {"returncode": 0, "stdout": "hello world\n\n", "stderr": ""},
+                )()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
+
+        monkeypatch.setattr(
+            "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
+        )
+        await client.call_tool("team_create", {"team_name": "tct_live"})
+        teams.add_member(
+            "tct_live", _make_teammate("worker", "tct_live", pane_id="%10")
+        )
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {
+                    "team_name": "tct_live",
+                    "agent_name": "worker",
+                    "include_output": True,
+                },
+            )
+        )
+        assert result["alive"] is True
+        assert result["output"] == "hello world"
+        assert result["error"] is None
+
+    async def test_should_not_include_output_by_default(
+        self, client: Client, monkeypatch
+    ):
+        def fake_subprocess_run(cmd, **kwargs):
+            if "display-message" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
+            if "capture-pane" in cmd:
+                return type(
+                    "R", (), {"returncode": 0, "stdout": "data\n", "stderr": ""}
+                )()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
+
+        monkeypatch.setattr(
+            "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
+        )
+        await client.call_tool("team_create", {"team_name": "tct_noout"})
+        teams.add_member(
+            "tct_noout", _make_teammate("worker", "tct_noout", pane_id="%14")
+        )
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_noout", "agent_name": "worker"},
+            )
+        )
+        assert "output" not in result
+
+    async def test_should_return_pending_from_messages(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_msg"})
+        teams.add_member("tct_msg", _make_teammate("worker", "tct_msg", pane_id=""))
+        # Worker sends a message to team-lead
+        await client.call_tool(
+            "send_message",
+            {
+                "team_name": "tct_msg",
+                "type": "message",
+                "sender": "worker",
+                "recipient": "team-lead",
+                "content": "task done",
+                "summary": "status",
+            },
+        )
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_msg", "agent_name": "worker"},
+            )
+        )
+        assert len(result["pending_from"]) == 1
+        assert result["pending_from"][0]["from"] == "worker"
+
+    async def test_should_mark_pending_from_as_read(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_read"})
+        teams.add_member("tct_read", _make_teammate("worker", "tct_read", pane_id=""))
+        await client.call_tool(
+            "send_message",
+            {
+                "team_name": "tct_read",
+                "type": "message",
+                "sender": "worker",
+                "recipient": "team-lead",
+                "content": "done",
+                "summary": "s",
+            },
+        )
+        # First check returns the message
+        result1 = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_read", "agent_name": "worker"},
+            )
+        )
+        assert len(result1["pending_from"]) == 1
+        # Second check returns empty (already read)
+        result2 = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_read", "agent_name": "worker"},
+            )
+        )
+        assert len(result2["pending_from"]) == 0
+
+    async def test_should_not_mark_other_senders_as_read(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_sel"})
+        teams.add_member("tct_sel", _make_teammate("alice", "tct_sel", pane_id=""))
+        teams.add_member("tct_sel", _make_teammate("bob", "tct_sel", pane_id=""))
+        # Both send messages to team-lead
+        for sender in ("alice", "bob"):
+            await client.call_tool(
+                "send_message",
+                {
+                    "team_name": "tct_sel",
+                    "type": "message",
+                    "sender": sender,
+                    "recipient": "team-lead",
+                    "content": f"from {sender}",
+                    "summary": "s",
+                },
+            )
+        # Check alice only
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_sel", "agent_name": "alice"},
+            )
+        )
+        assert len(result["pending_from"]) == 1
+        assert result["pending_from"][0]["from"] == "alice"
+        # Bob's message should still be unread
+        inbox = _data(
+            await client.call_tool(
+                "read_inbox",
+                {"team_name": "tct_sel", "agent_name": "team-lead"},
+            )
+        )
+        # Should have bob's message (alice's was already read by check_teammate)
+        bob_msgs = [m for m in inbox if m["from"] == "bob"]
+        assert len(bob_msgs) == 1
+
+    async def test_should_include_their_unread_count(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_uc"})
+        teams.add_member("tct_uc", _make_teammate("worker", "tct_uc", pane_id=""))
+        # Send a message TO the worker (so their inbox has unread)
+        await client.call_tool(
+            "send_message",
+            {
+                "team_name": "tct_uc",
+                "type": "message",
+                "recipient": "worker",
+                "content": "do this",
+                "summary": "task",
+            },
+        )
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_uc", "agent_name": "worker"},
+            )
+        )
+        assert result["their_unread_count"] == 1
+
+    async def test_should_include_push_available_field(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_push"})
+        teams.add_member("tct_push", _make_teammate("worker", "tct_push", pane_id=""))
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {"team_name": "tct_push", "agent_name": "worker"},
+            )
+        )
+        assert "push_available" in result
+        assert "notification_scheduled" in result
+
+    async def test_should_reject_notify_after_minutes_below_one(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tct_nmin"})
+        teams.add_member("tct_nmin", _make_teammate("worker", "tct_nmin", pane_id=""))
+        result = await client.call_tool(
+            "check_teammate",
+            {
+                "team_name": "tct_nmin",
+                "agent_name": "worker",
+                "notify_after_minutes": 0,
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "notify_after_minutes" in result.content[0].text
+
+    async def test_should_schedule_notification_when_push_available(
+        self, client: Client, monkeypatch
+    ):
+        from claude_teams.server import _lifespan_state
+
+        _lifespan_state["lead_opencode_session_id"] = "ses_lead_456"
+        _lifespan_state["opencode_server_url"] = "http://localhost:4096"
+        pushed = []
+        monkeypatch.setattr(
+            "claude_teams.server.opencode_client.send_prompt_async",
+            lambda url, sid, text: pushed.append((url, sid, text)),
+        )
+        try:
+            await client.call_tool("team_create", {"team_name": "tct_sched"})
+            teams.add_member(
+                "tct_sched", _make_teammate("worker", "tct_sched", pane_id="")
+            )
+            result = _data(
+                await client.call_tool(
+                    "check_teammate",
+                    {
+                        "team_name": "tct_sched",
+                        "agent_name": "worker",
+                        "notify_after_minutes": 1,
+                    },
+                )
+            )
+            assert result["notification_scheduled"] is True
+            assert result["push_available"] is True
+        finally:
+            _lifespan_state["lead_opencode_session_id"] = None
+            _lifespan_state["opencode_server_url"] = None
+
+    async def test_should_error_when_notify_requested_but_push_unavailable(
+        self, client: Client
+    ):
+        await client.call_tool("team_create", {"team_name": "tct_nopush"})
+        teams.add_member(
+            "tct_nopush", _make_teammate("worker", "tct_nopush", pane_id="")
+        )
+        result = await client.call_tool(
+            "check_teammate",
+            {
+                "team_name": "tct_nopush",
+                "agent_name": "worker",
+                "notify_after_minutes": 5,
+            },
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not supported" in result.content[0].text.lower()
+
+    async def test_should_skip_messages_when_include_messages_false(
+        self, client: Client
+    ):
+        await client.call_tool("team_create", {"team_name": "tct_nomsg"})
+        teams.add_member("tct_nomsg", _make_teammate("worker", "tct_nomsg", pane_id=""))
+        await client.call_tool(
+            "send_message",
+            {
+                "team_name": "tct_nomsg",
+                "type": "message",
+                "sender": "worker",
+                "recipient": "team-lead",
+                "content": "hello",
+                "summary": "s",
+            },
+        )
+        result = _data(
+            await client.call_tool(
+                "check_teammate",
+                {
+                    "team_name": "tct_nomsg",
+                    "agent_name": "worker",
+                    "include_messages": False,
+                },
+            )
+        )
+        assert result["pending_from"] == []
+        # Message should still be unread in lead inbox
+        inbox = _data(
+            await client.call_tool(
+                "read_inbox",
+                {"team_name": "tct_nomsg", "agent_name": "team-lead"},
+            )
+        )
+        assert len(inbox) == 1
+
+
+class TestCheckTeammateDescription:
+    async def test_should_indicate_push_unavailable_by_default(self, client: Client):
+        """Default description (no opencode session) should warn against notify_after_minutes."""
+        tools = await client.list_tools()
+        check_tool = next(t for t in tools if t.name == "check_teammate")
+        assert "NOT available" in check_tool.description
+        assert "Do NOT pass notify_after_minutes" in check_tool.description
+
+    async def test_should_indicate_push_available_when_session_known(
+        self, client: Client, monkeypatch
+    ):
+        """When lead session is discovered, description should advertise push."""
+        from claude_teams.server import (
+            _build_check_teammate_description,
+            _check_teammate_tool,
+        )
+
+        # Simulate what middleware does
+        if _check_teammate_tool:
+            _check_teammate_tool.description = _build_check_teammate_description(
+                push_available=True
+            )
+        try:
+            tools = await client.list_tools()
+            check_tool = next(t for t in tools if t.name == "check_teammate")
+            assert "available in this session" in check_tool.description
+            assert "notify_after_minutes" in check_tool.description
+            assert "NOT available" not in check_tool.description
+        finally:
+            # Restore
+            if _check_teammate_tool:
+                _check_teammate_tool.description = _build_check_teammate_description(
+                    push_available=False
+                )
 
 
 class TestEnabledBackendsEnvParsing:
@@ -1204,3 +1515,31 @@ class TestEnabledBackendsEnvParsing:
 
     def test_should_filter_all_unknown_backends(self):
         assert _parse_backends_env("bogus,fake") == []
+
+
+class TestReadInboxDescription:
+    async def test_should_show_default_description_without_lead_session(
+        self, client: Client
+    ):
+        tools = await client.list_tools()
+        ri_tool = next(t for t in tools if t.name == "read_inbox")
+        assert "Returns unread messages by default" in ri_tool.description
+        assert "check_teammate" not in ri_tool.description
+
+    async def test_should_recommend_check_teammate_for_lead(self, client: Client):
+        from claude_teams.server import _read_inbox_tool
+
+        if _read_inbox_tool:
+            _read_inbox_tool.description = _build_read_inbox_description(
+                is_lead_session=True
+            )
+        try:
+            tools = await client.list_tools()
+            ri_tool = next(t for t in tools if t.name == "read_inbox")
+            assert "check_teammate" in ri_tool.description
+            assert "prefer" in ri_tool.description.lower()
+        finally:
+            if _read_inbox_tool:
+                _read_inbox_tool.description = _build_read_inbox_description(
+                    is_lead_session=False
+                )
