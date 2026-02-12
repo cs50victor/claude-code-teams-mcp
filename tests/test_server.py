@@ -11,6 +11,8 @@ from claude_teams import messaging, tasks, teams
 from claude_teams.models import TeammateMember
 from claude_teams.server import (
     _build_check_teammate_description,
+    _build_poll_inbox_description,
+    _build_read_inbox_description,
     _build_spawn_description,
     _parse_backends_env,
     mcp,
@@ -1562,5 +1564,47 @@ class TestEnabledBackendsEnvParsing:
 
     def test_should_filter_all_unknown_backends(self):
         assert _parse_backends_env("bogus,fake") == []
+
+
+class TestPollInboxDescription:
+    async def test_should_show_default_description_without_lead_session(self, client: Client):
+        tools = await client.list_tools()
+        poll_tool = next(t for t in tools if t.name == "poll_inbox")
+        assert "Convenience tool" in poll_tool.description
+        assert "check_teammate" not in poll_tool.description
+
+    async def test_should_recommend_check_teammate_for_lead(self, client: Client):
+        from claude_teams.server import _poll_inbox_tool
+        if _poll_inbox_tool:
+            _poll_inbox_tool.description = _build_poll_inbox_description(is_lead_session=True)
+        try:
+            tools = await client.list_tools()
+            poll_tool = next(t for t in tools if t.name == "poll_inbox")
+            assert "check_teammate" in poll_tool.description
+            assert "prefer" in poll_tool.description.lower()
+        finally:
+            if _poll_inbox_tool:
+                _poll_inbox_tool.description = _build_poll_inbox_description(is_lead_session=False)
+
+
+class TestReadInboxDescription:
+    async def test_should_show_default_description_without_lead_session(self, client: Client):
+        tools = await client.list_tools()
+        ri_tool = next(t for t in tools if t.name == "read_inbox")
+        assert "unread_only" in ri_tool.description
+        assert "check_teammate" not in ri_tool.description
+
+    async def test_should_recommend_check_teammate_for_lead(self, client: Client):
+        from claude_teams.server import _read_inbox_tool
+        if _read_inbox_tool:
+            _read_inbox_tool.description = _build_read_inbox_description(is_lead_session=True)
+        try:
+            tools = await client.list_tools()
+            ri_tool = next(t for t in tools if t.name == "read_inbox")
+            assert "check_teammate" in ri_tool.description
+            assert "prefer" in ri_tool.description.lower()
+        finally:
+            if _read_inbox_tool:
+                _read_inbox_tool.description = _build_read_inbox_description(is_lead_session=False)
 
 

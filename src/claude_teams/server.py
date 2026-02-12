@@ -52,6 +52,8 @@ KNOWN_CLIENTS: dict[str, str] = {
 _lifespan_state: dict[str, Any] = {}
 _spawn_tool: Any = None
 _check_teammate_tool: Any = None
+_poll_inbox_tool: Any = None
+_read_inbox_tool: Any = None
 
 
 _VALID_BACKENDS = frozenset(KNOWN_CLIENTS.values())
@@ -133,6 +135,45 @@ def _build_check_teammate_description(push_available: bool) -> str:
     )
 
 
+_POLL_INBOX_BASE_DESCRIPTION = (
+    "Poll an agent's inbox for new unread messages, waiting up to timeout_ms. "
+    "Returns unread messages and marks them as read."
+)
+
+
+def _build_poll_inbox_description(is_lead_session: bool) -> str:
+    if is_lead_session:
+        return (
+            _POLL_INBOX_BASE_DESCRIPTION
+            + " NOTE: As team-lead, prefer check_teammate over poll_inbox."
+            " check_teammate is non-blocking and provides richer status."
+        )
+    return (
+        _POLL_INBOX_BASE_DESCRIPTION
+        + " Convenience tool for MCP clients that cannot watch the filesystem."
+    )
+
+
+_READ_INBOX_BASE_DESCRIPTION = (
+    "Read messages from an agent's inbox. Returns unread messages by default "
+    "and marks them as read."
+)
+
+
+def _build_read_inbox_description(is_lead_session: bool) -> str:
+    if is_lead_session:
+        return (
+            _READ_INBOX_BASE_DESCRIPTION
+            + " NOTE: As team-lead, prefer check_teammate to read messages"
+            " from a specific teammate. check_teammate filters by sender"
+            " and provides richer status."
+        )
+    return (
+        _READ_INBOX_BASE_DESCRIPTION
+        + " Set unread_only=False to include previously read messages."
+    )
+
+
 def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
     tool.parameters["properties"]["backend_type"]["enum"] = list(enabled)
     if enabled:
@@ -189,8 +230,7 @@ def _discover_lead_opencode_session(server_url: str) -> str | None:
 
 @lifespan
 async def app_lifespan(server):
-    global _spawn_tool
-    global _check_teammate_tool
+    global _spawn_tool, _check_teammate_tool, _poll_inbox_tool, _read_inbox_tool
 
     claude_binary = discover_harness_binary("claude")
     opencode_binary = discover_harness_binary("opencode")
@@ -244,6 +284,14 @@ async def app_lifespan(server):
     _check_teammate_tool = check_tool
     # Push is never available at lifespan time (lead session discovered in middleware)
     check_tool.description = _build_check_teammate_description(push_available=False)
+
+    poll_tool = await mcp.get_tool("poll_inbox")
+    _poll_inbox_tool = poll_tool
+    poll_tool.description = _build_poll_inbox_description(is_lead_session=False)
+
+    ri_tool = await mcp.get_tool("read_inbox")
+    _read_inbox_tool = ri_tool
+    ri_tool.description = _build_read_inbox_description(is_lead_session=False)
 
     session_id = str(uuid.uuid4())
     _lifespan_state.clear()
@@ -318,6 +366,13 @@ class HarnessDetectionMiddleware(Middleware):
             _check_teammate_tool.description = _build_check_teammate_description(
                 push_available
             )
+
+        # Update poll_inbox and read_inbox descriptions for lead sessions
+        is_lead = bool(_lifespan_state.get("lead_opencode_session_id"))
+        if _poll_inbox_tool:
+            _poll_inbox_tool.description = _build_poll_inbox_description(is_lead)
+        if _read_inbox_tool:
+            _read_inbox_tool.description = _build_read_inbox_description(is_lead)
 
         if _spawn_tool:
             _update_spawn_tool(_spawn_tool, enabled, _lifespan_state)
@@ -785,8 +840,7 @@ def read_inbox(
     unread_only: bool = True,
     mark_as_read: bool = True,
 ) -> list[dict]:
-    """Read unread messages from an agent's inbox and mark them as read.
-    Set unread_only=False to include previously read messages."""
+    """Read inbox messages. Description is dynamically updated at startup."""
     try:
         config = teams.read_config(team_name)
     except FileNotFoundError:
@@ -842,9 +896,7 @@ async def poll_inbox(
     agent_name: str,
     timeout_ms: int = 30000,
 ) -> list[dict]:
-    """Poll an agent's inbox for new unread messages, waiting up to timeout_ms.
-    Returns unread messages and marks them as read. Convenience tool for MCP
-    clients that cannot watch the filesystem."""
+    """Poll for inbox messages. Description is dynamically updated at startup."""
     msgs = messaging.read_inbox(
         team_name, agent_name, unread_only=True, mark_as_read=True
     )
