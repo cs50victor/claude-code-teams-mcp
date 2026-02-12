@@ -51,14 +51,11 @@ KNOWN_CLIENTS: dict[str, str] = {
 #   All references point to the same dict. Middleware mutations propagate.
 _lifespan_state: dict[str, Any] = {}
 _spawn_tool: Any = None
+_check_teammate_tool: Any = None
 
 
 _VALID_BACKENDS = frozenset(KNOWN_CLIENTS.values())
 
-
-def _lead_notify_enabled() -> bool:
-    """Check if experimental lead notification feature is enabled."""
-    return os.environ.get("CLAUDE_TEAMS_EXPERIMENTAL_LEAD_NOTIFY") is not None
 
 
 def _parse_backends_env(raw: str) -> list[str]:
@@ -112,6 +109,28 @@ def _build_spawn_description(
             + "\n".join(agent_lines)
         )
     return " ".join(parts)
+
+
+_CHECK_TEAMMATE_BASE_DESCRIPTION = (
+    "Check a single teammate's status: alive/dead, unread messages from them, "
+    "their unread count, and optionally terminal output. Always non-blocking. "
+    "Use parallel calls to check multiple teammates."
+)
+
+
+def _build_check_teammate_description(push_available: bool) -> str:
+    if push_available:
+        return (
+            _CHECK_TEAMMATE_BASE_DESCRIPTION
+            + " Push notifications are available in this session."
+            " Use notify_after_minutes to schedule a deferred reminder."
+        )
+    return (
+        _CHECK_TEAMMATE_BASE_DESCRIPTION
+        + " Push notifications are NOT available in this session"
+        " (not supported by the current harness)."
+        " Do NOT pass notify_after_minutes."
+    )
 
 
 def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
@@ -171,6 +190,7 @@ def _discover_lead_opencode_session(server_url: str) -> str | None:
 @lifespan
 async def app_lifespan(server):
     global _spawn_tool
+    global _check_teammate_tool
 
     claude_binary = discover_harness_binary("claude")
     opencode_binary = discover_harness_binary("opencode")
@@ -219,6 +239,11 @@ async def app_lifespan(server):
             opencode_server_url,
             opencode_agents,
         )
+
+    check_tool = await mcp.get_tool("check_teammate")
+    _check_teammate_tool = check_tool
+    # Push is never available at lifespan time (lead session discovered in middleware)
+    check_tool.description = _build_check_teammate_description(push_available=False)
 
     session_id = str(uuid.uuid4())
     _lifespan_state.clear()
@@ -274,16 +299,25 @@ class HarnessDetectionMiddleware(Middleware):
         _lifespan_state["client_name"] = client_name
         _lifespan_state["client_version"] = client_version
 
-        # Experimental: discover lead's OpenCode session for push notifications
+        # Discover lead's OpenCode session for push notifications
         if (
-            _lead_notify_enabled()
-            and client_name == "opencode"
+            client_name == "opencode"
             and _lifespan_state.get("opencode_server_url")
         ):
             lead_session = _discover_lead_opencode_session(
                 _lifespan_state["opencode_server_url"]
             )
             _lifespan_state["lead_opencode_session_id"] = lead_session
+
+        # Update check_teammate description based on push availability
+        if _check_teammate_tool:
+            push_available = bool(
+                _lifespan_state.get("lead_opencode_session_id")
+                and _lifespan_state.get("opencode_server_url")
+            )
+            _check_teammate_tool.description = _build_check_teammate_description(
+                push_available
+            )
 
         if _spawn_tool:
             _update_spawn_tool(_spawn_tool, enabled, _lifespan_state)
@@ -514,8 +548,8 @@ def send_message(
         if target_member and oc_url:
             _push_to_opencode_session(oc_url, target_member, content)
 
-        # Experimental: push to lead's OpenCode session
-        if recipient == "team-lead" and _lead_notify_enabled():
+        # Push to lead's OpenCode session
+        if recipient == "team-lead":
             ls = _get_lifespan(ctx)
             lead_sid = ls.get("lead_opencode_session_id")
             if lead_sid and oc_url:
@@ -817,10 +851,10 @@ async def poll_inbox(
     if msgs:
         return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
 
-    # When lead notify is enabled and client is OpenCode, return immediately.
+    # When lead's OpenCode session is known, return immediately.
     # Messages are pushed to the lead's session via send_prompt_async,
     # so blocking here is unnecessary and harmful (single-threaded agent).
-    if _lead_notify_enabled() and _lifespan_state.get("client_name") == "opencode":
+    if _lifespan_state.get("lead_opencode_session_id"):
         return []
 
     deadline = time.time() + timeout_ms / 1000.0
@@ -854,15 +888,23 @@ def process_shutdown_approved(team_name: str, agent_name: str, ctx: Context) -> 
 
 
 @mcp.tool
-def peek_teammate(
+async def check_teammate(
     team_name: str,
     agent_name: str,
-    lines: int = 40,
+    ctx: Context,
+    include_output: bool = False,
+    output_lines: int = 20,
+    include_messages: bool = True,
+    max_messages: int = 5,
+    notify_after_minutes: int | None = None,
 ) -> dict:
-    """Peek at a teammate's current terminal output via tmux. Returns a lightweight
-    status snapshot: whether the process is alive, the last N lines of output,
-    and unread inbox message count. Non-blocking alternative to poll_inbox for
-    checking teammate progress."""
+    """Check a single teammate's status. Description is dynamically updated
+    at startup with push notification availability."""
+    output_lines = max(1, min(output_lines, 120))
+    max_messages = max(1, min(max_messages, 20))
+    if notify_after_minutes is not None and notify_after_minutes < 1:
+        raise ToolError("notify_after_minutes must be >= 1")
+
     try:
         config = teams.read_config(team_name)
     except FileNotFoundError:
@@ -876,43 +918,117 @@ def peek_teammate(
     if member is None:
         raise ToolError(f"Teammate {agent_name!r} not found in team {team_name!r}")
 
-    lines = max(1, min(lines, 500))
+    # 1. Read lead's inbox for unread messages FROM this teammate
+    pending_from: list[dict] = []
+    if include_messages:
+        msgs = messaging.read_inbox_filtered(
+            team_name=team_name,
+            agent_name="team-lead",
+            sender_filter=agent_name,
+            unread_only=True,
+            mark_as_read=True,
+            limit=max_messages,
+        )
+        pending_from = [
+            m.model_dump(by_alias=True, exclude_none=True) for m in msgs
+        ]
 
+    # 2. Check teammate's unread count (messages they haven't read)
     try:
-        unread = messaging.read_inbox(
+        their_unread = messaging.read_inbox(
             team_name, agent_name, unread_only=True, mark_as_read=False
         )
-        unread_count = len(unread)
-    except Exception:
-        unread_count = 0
+        their_unread_count = len(their_unread)
+    except (FileNotFoundError, json.JSONDecodeError):
+        their_unread_count = 0
 
+    # 3. tmux status
+    alive = False
+    error = None
+    output = ""
     if not member.tmux_pane_id:
-        return {
-            "name": agent_name,
-            "alive": False,
-            "output": "",
-            "unread_count": unread_count,
-            "error": "no tmux target recorded",
-        }
+        error = "no tmux target recorded"
+    else:
+        pane_id, resolve_error = resolve_pane_target(member.tmux_pane_id)
+        if pane_id is None:
+            error = resolve_error
+        else:
+            pane = peek_pane(pane_id, output_lines if include_output else 1)
+            alive = pane["alive"]
+            error = pane["error"]
+            if include_output:
+                output = pane["output"]
 
-    pane_id, resolve_error = resolve_pane_target(member.tmux_pane_id)
-    if pane_id is None:
-        return {
-            "name": agent_name,
-            "alive": False,
-            "output": "",
-            "unread_count": unread_count,
-            "error": resolve_error,
-        }
+    # 4. Optional deferred notification
+    ls = _get_lifespan(ctx)
+    push_available = bool(
+        ls.get("lead_opencode_session_id") and ls.get("opencode_server_url")
+    )
+    notification_scheduled = False
 
-    pane_status = peek_pane(pane_id, lines)
-    return {
+    if notify_after_minutes is not None and not push_available:
+        raise ToolError(
+            "notify_after_minutes is not supported by the current harness."
+        )
+
+    if notify_after_minutes is not None and push_available:
+        delay_s = notify_after_minutes * 60
+        oc_url = ls["opencode_server_url"]
+        lead_sid = ls["lead_opencode_session_id"]
+        t_team = team_name
+        t_agent = agent_name
+
+        async def _notify_task():
+            await asyncio.sleep(delay_s)
+            # Re-check teammate still exists
+            try:
+                cfg = teams.read_config(t_team)
+            except FileNotFoundError:
+                return
+            still_exists = any(
+                isinstance(m, TeammateMember) and m.name == t_agent
+                for m in cfg.members
+            )
+            if not still_exists:
+                return
+            # Compute minimal status
+            try:
+                pending = messaging.read_inbox_filtered(
+                    t_team, "team-lead",
+                    sender_filter=t_agent,
+                    unread_only=True,
+                    mark_as_read=False,
+                )
+                pending_count = len(pending)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pending_count = 0
+            text = (
+                f"[claude-teams reminder] {t_agent}: "
+                f"{pending_count} unread message(s) for team-lead. "
+                f"Call check_teammate to review."
+            )
+            try:
+                _push_to_lead(oc_url, lead_sid, text)
+            except Exception:
+                logger.warning(
+                    "check_teammate reminder push failed for %s", t_agent
+                )
+
+        asyncio.create_task(_notify_task())
+        notification_scheduled = True
+
+    result: dict = {
         "name": agent_name,
-        "alive": pane_status["alive"],
-        "output": pane_status["output"],
-        "unread_count": unread_count,
-        "error": pane_status["error"],
+        "alive": alive,
+        "pending_from": pending_from,
+        "their_unread_count": their_unread_count,
+        "error": error,
+        "notification_scheduled": notification_scheduled,
+        "push_available": push_available,
     }
+    if include_output:
+        result["output"] = output
+    return result
 
 
 def main():
