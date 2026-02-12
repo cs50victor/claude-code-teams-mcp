@@ -230,6 +230,17 @@ def _get_lifespan(ctx: Context) -> dict[str, Any]:
     return ctx.lifespan_context
 
 
+def _content_metadata(content: str, sender: str) -> str:
+    """Append sender signature and reply reminder to outgoing message content."""
+    return (
+        f"{content}\n\n"
+        f"<system_reminder>"
+        f"This message was sent from {sender}. "
+        f"Use your send_message tool to respond."
+        f"</system_reminder>"
+    )
+
+
 @mcp.tool
 def team_create(
     team_name: str,
@@ -405,6 +416,7 @@ def send_message(
                 target_color = m.color
                 target_member = m
                 break
+        content = _content_metadata(content, sender)
         messaging.send_plain_message(
             team_name,
             sender,
@@ -422,8 +434,6 @@ def send_message(
                 "sender": sender,
                 "target": recipient,
                 "targetColor": target_color,
-                "summary": summary,
-                "content": content,
             },
         ).model_dump(exclude_none=True)
 
@@ -433,6 +443,7 @@ def send_message(
         if not summary:
             raise ToolError("Broadcast summary must not be empty")
         config = teams.read_config(team_name)
+        content = _content_metadata(content, sender)
         count = 0
         for m in config.members:
             if isinstance(m, TeammateMember):
@@ -570,7 +581,7 @@ def task_create(
         task = tasks.create_task(team_name, subject, description, active_form, metadata)
     except ValueError as e:
         raise ToolError(str(e))
-    return task.model_dump(by_alias=True, exclude_none=True)
+    return {"id": task.id, "status": task.status}
 
 
 @mcp.tool
@@ -616,7 +627,7 @@ def task_update(
         raise ToolError(str(e))
     if owner is not None and task.owner is not None and task.status != "deleted":
         messaging.send_task_assignment(team_name, task, assigned_by="team-lead")
-    return task.model_dump(by_alias=True, exclude_none=True)
+    return {"id": task.id, "status": task.status}
 
 
 @mcp.tool
@@ -643,11 +654,11 @@ def task_get(team_name: str, task_id: str) -> dict:
 def read_inbox(
     team_name: str,
     agent_name: str,
-    unread_only: bool = False,
+    unread_only: bool = True,
     mark_as_read: bool = True,
 ) -> list[dict]:
-    """Read messages from an agent's inbox. Returns all messages by default.
-    Set unread_only=True to get only unprocessed messages."""
+    """Read unread messages from an agent's inbox and mark them as read.
+    Set unread_only=False to include previously read messages."""
     try:
         config = teams.read_config(team_name)
     except FileNotFoundError:
@@ -668,7 +679,10 @@ def read_config(team_name: str) -> dict:
         config = teams.read_config(team_name)
     except FileNotFoundError:
         raise ToolError(f"Team {team_name!r} not found")
-    return config.model_dump(by_alias=True)
+    data = config.model_dump(by_alias=True)
+    for m in data.get("members", []):
+        m.pop("prompt", None)
+    return data
 
 
 @mcp.tool
