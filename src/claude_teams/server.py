@@ -230,6 +230,17 @@ def _get_lifespan(ctx: Context) -> dict[str, Any]:
     return ctx.lifespan_context
 
 
+def _content_metadata(content: str, sender: str) -> str:
+    """Append sender signature and reply reminder to outgoing message content."""
+    return (
+        f"{content}\n\n"
+        f"<system_reminder>"
+        f"This message was sent from {sender}. "
+        f"Use your send_message tool to respond."
+        f"</system_reminder>"
+    )
+
+
 @mcp.tool
 def team_create(
     team_name: str,
@@ -405,7 +416,7 @@ def send_message(
                 target_color = m.color
                 target_member = m
                 break
-        content = f"{content}\n\n-- sent from {sender} (remember to use your <send_message> tool to respond to me)"
+        content = _content_metadata(content, sender)
         messaging.send_plain_message(
             team_name,
             sender,
@@ -432,7 +443,7 @@ def send_message(
         if not summary:
             raise ToolError("Broadcast summary must not be empty")
         config = teams.read_config(team_name)
-        content = f"{content}\n\n-- sent from {sender} (remember to use your <send_message> tool to respond to me)"
+        content = _content_metadata(content, sender)
         count = 0
         for m in config.members:
             if isinstance(m, TeammateMember):
