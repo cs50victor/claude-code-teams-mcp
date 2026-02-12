@@ -29,6 +29,7 @@ from claude_teams.spawner import (
     spawn_teammate,
     use_tmux_windows,
 )
+from claude_teams.tmux_introspection import peek_pane, resolve_pane_target
 
 logger = logging.getLogger(__name__)
 
@@ -750,6 +751,68 @@ def process_shutdown_approved(team_name: str, agent_name: str, ctx: Context) -> 
     teams.remove_member(team_name, agent_name)
     tasks.reset_owner_tasks(team_name, agent_name)
     return {"success": True, "message": f"{agent_name} removed from team."}
+
+
+@mcp.tool
+def peek_teammate(
+    team_name: str,
+    agent_name: str,
+    lines: int = 40,
+) -> dict:
+    """Peek at a teammate's current terminal output via tmux. Returns a lightweight
+    status snapshot: whether the process is alive, the last N lines of output,
+    and unread inbox message count. Non-blocking alternative to poll_inbox for
+    checking teammate progress."""
+    try:
+        config = teams.read_config(team_name)
+    except FileNotFoundError:
+        raise ToolError(f"Team {team_name!r} not found")
+
+    member = None
+    for m in config.members:
+        if isinstance(m, TeammateMember) and m.name == agent_name:
+            member = m
+            break
+    if member is None:
+        raise ToolError(f"Teammate {agent_name!r} not found in team {team_name!r}")
+
+    lines = max(1, min(lines, 500))
+
+    try:
+        unread = messaging.read_inbox(
+            team_name, agent_name, unread_only=True, mark_as_read=False
+        )
+        unread_count = len(unread)
+    except Exception:
+        unread_count = 0
+
+    if not member.tmux_pane_id:
+        return {
+            "name": agent_name,
+            "alive": False,
+            "output": "",
+            "unread_count": unread_count,
+            "error": "no tmux target recorded",
+        }
+
+    pane_id, resolve_error = resolve_pane_target(member.tmux_pane_id)
+    if pane_id is None:
+        return {
+            "name": agent_name,
+            "alive": False,
+            "output": "",
+            "unread_count": unread_count,
+            "error": resolve_error,
+        }
+
+    pane_status = peek_pane(pane_id, lines)
+    return {
+        "name": agent_name,
+        "alive": pane_status["alive"],
+        "output": pane_status["output"],
+        "unread_count": unread_count,
+        "error": pane_status["error"],
+    }
 
 
 def main():

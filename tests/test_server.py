@@ -1186,6 +1186,149 @@ class TestOpencodeWithoutUrl:
         assert "not enabled" in result.content[0].text.lower()
 
 
+class TestPeekTeammate:
+    async def test_should_return_error_for_unknown_agent(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tp_unk"})
+        result = await client.call_tool(
+            "peek_teammate",
+            {"team_name": "tp_unk", "agent_name": "ghost"},
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "ghost" in result.content[0].text
+
+    async def test_should_return_error_for_missing_team(self, client: Client):
+        result = await client.call_tool(
+            "peek_teammate",
+            {"team_name": "nonexistent", "agent_name": "bob"},
+            raise_on_error=False,
+        )
+        assert result.is_error is True
+        assert "not found" in result.content[0].text.lower()
+
+    async def test_should_return_not_alive_for_empty_pane_id(self, client: Client):
+        await client.call_tool("team_create", {"team_name": "tp_empty"})
+        teams.add_member("tp_empty", _make_teammate("worker", "tp_empty", pane_id=""))
+        result = _data(
+            await client.call_tool(
+                "peek_teammate",
+                {"team_name": "tp_empty", "agent_name": "worker"},
+            )
+        )
+        assert result["alive"] is False
+        assert result["error"] == "no tmux target recorded"
+        assert result["name"] == "worker"
+
+    async def test_should_return_status_for_live_pane(
+        self, client: Client, monkeypatch
+    ):
+        def fake_subprocess_run(cmd, **kwargs):
+            if "display-message" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
+            if "capture-pane" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "hello world\n\n", "stderr": ""})()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
+
+        monkeypatch.setattr(
+            "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
+        )
+        await client.call_tool("team_create", {"team_name": "tp_live"})
+        teams.add_member("tp_live", _make_teammate("worker", "tp_live", pane_id="%10"))
+        result = _data(
+            await client.call_tool(
+                "peek_teammate",
+                {"team_name": "tp_live", "agent_name": "worker"},
+            )
+        )
+        assert result["alive"] is True
+        assert result["output"] == "hello world"
+        assert result["error"] is None
+
+    async def test_should_return_not_alive_for_dead_pane(
+        self, client: Client, monkeypatch
+    ):
+        def fake_subprocess_run(cmd, **kwargs):
+            if "display-message" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "1\n", "stderr": ""})()
+            if "capture-pane" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
+
+        monkeypatch.setattr(
+            "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
+        )
+        await client.call_tool("team_create", {"team_name": "tp_dead"})
+        teams.add_member("tp_dead", _make_teammate("worker", "tp_dead", pane_id="%11"))
+        result = _data(
+            await client.call_tool(
+                "peek_teammate",
+                {"team_name": "tp_dead", "agent_name": "worker"},
+            )
+        )
+        assert result["alive"] is False
+
+    async def test_should_include_unread_count(self, client: Client, monkeypatch):
+        def fake_subprocess_run(cmd, **kwargs):
+            if "display-message" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
+            if "capture-pane" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "output\n", "stderr": ""})()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
+
+        monkeypatch.setattr(
+            "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
+        )
+        await client.call_tool("team_create", {"team_name": "tp_unread"})
+        teams.add_member(
+            "tp_unread", _make_teammate("worker", "tp_unread", pane_id="%12")
+        )
+        # Send a message to the worker so there's 1 unread
+        await client.call_tool(
+            "send_message",
+            {
+                "team_name": "tp_unread",
+                "type": "message",
+                "recipient": "worker",
+                "content": "check this",
+                "summary": "task",
+            },
+        )
+        result = _data(
+            await client.call_tool(
+                "peek_teammate",
+                {"team_name": "tp_unread", "agent_name": "worker"},
+            )
+        )
+        assert result["unread_count"] == 1
+
+    async def test_should_clamp_lines(self, client: Client, monkeypatch):
+        captured_cmds = []
+
+        def fake_subprocess_run(cmd, **kwargs):
+            captured_cmds.append(cmd)
+            if "display-message" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
+            if "capture-pane" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
+
+        monkeypatch.setattr(
+            "claude_teams.tmux_introspection.subprocess.run", fake_subprocess_run
+        )
+        await client.call_tool("team_create", {"team_name": "tp_clamp"})
+        teams.add_member(
+            "tp_clamp", _make_teammate("worker", "tp_clamp", pane_id="%13")
+        )
+        await client.call_tool(
+            "peek_teammate",
+            {"team_name": "tp_clamp", "agent_name": "worker", "lines": 9999},
+        )
+        # Find the capture-pane command and verify lines was clamped to 500
+        capture_cmd = [c for c in captured_cmds if "capture-pane" in c]
+        assert len(capture_cmd) == 1
+        assert "-500" in capture_cmd[0]
+
+
 class TestEnabledBackendsEnvParsing:
     def test_should_parse_comma_separated_backends(self):
         assert _parse_backends_env("claude,opencode") == ["claude", "opencode"]

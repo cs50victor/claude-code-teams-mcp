@@ -23,7 +23,7 @@ Claude Code (`.mcp.json`):
   "mcpServers": {
     "claude-teams": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"]
+      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.1", "claude-teams"]
     }
   }
 }
@@ -36,7 +36,7 @@ OpenCode (`~/.config/opencode/opencode.json`):
   "mcp": {
     "claude-teams": {
       "type": "local",
-      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"],
+      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.1", "claude-teams"],
       "enabled": true
     }
   }
@@ -65,7 +65,7 @@ Without `CLAUDE_TEAMS_BACKENDS`, the server auto-detects the connecting client a
   "mcpServers": {
     "claude-teams": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.0", "claude-teams"],
+      "args": ["--from", "git+https://github.com/cs50victor/claude-code-teams-mcp@v0.1.1", "claude-teams"],
       "env": {
         "CLAUDE_TEAMS_BACKENDS": "claude,opencode",
         "OPENCODE_SERVER_URL": "http://localhost:4096"
