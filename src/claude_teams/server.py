@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -55,10 +56,21 @@ _spawn_tool: Any = None
 _VALID_BACKENDS = frozenset(KNOWN_CLIENTS.values())
 
 
+def _lead_notify_enabled() -> bool:
+    """Check if experimental lead notification feature is enabled."""
+    return os.environ.get("CLAUDE_TEAMS_EXPERIMENTAL_LEAD_NOTIFY") is not None
+
+
 def _parse_backends_env(raw: str) -> list[str]:
     if not raw:
         return []
-    return list(dict.fromkeys(b.strip() for b in raw.split(",") if b.strip() and b.strip() in _VALID_BACKENDS))
+    return list(
+        dict.fromkeys(
+            b.strip()
+            for b in raw.split(",")
+            if b.strip() and b.strip() in _VALID_BACKENDS
+        )
+    )
 
 
 _SPAWN_TOOL_BASE_DESCRIPTION = (
@@ -116,6 +128,46 @@ def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
     )
 
 
+def _discover_lead_opencode_session(server_url: str) -> str | None:
+    """Discover the lead agent's OpenCode session ID.
+
+    Queries active sessions on the OpenCode server, filters by current
+    working directory. Returns session ID if exactly one match, else None.
+    """
+    try:
+        active = opencode_client.list_active_sessions(server_url)
+    except OpenCodeAPIError:
+        logger.warning("Lead notify: failed to list active sessions")
+        return None
+
+    if not active:
+        return None
+
+    cwd = str(Path.cwd())
+    candidates = []
+    for session_id in active:
+        try:
+            session = opencode_client.get_session(server_url, session_id)
+        except OpenCodeAPIError:
+            continue
+        if session.get("directory") == cwd:
+            candidates.append(session_id)
+
+    if len(candidates) == 1:
+        logger.info("Lead notify: discovered lead session %s", candidates[0])
+        return candidates[0]
+
+    if len(candidates) > 1:
+        logger.warning(
+            "Lead notify: %d active sessions in cwd, cannot determine lead",
+            len(candidates),
+        )
+    else:
+        logger.info("Lead notify: no active sessions found in cwd")
+
+    return None
+
+
 @lifespan
 async def app_lifespan(server):
     global _spawn_tool
@@ -148,33 +200,43 @@ async def app_lifespan(server):
     _spawn_tool = tool
 
     if enabled_backends:
-        _update_spawn_tool(tool, enabled_backends, {
-            "claude_binary": claude_binary,
-            "opencode_binary": opencode_binary,
-            "opencode_models": opencode_models,
-            "opencode_server_url": opencode_server_url,
-            "opencode_agents": opencode_agents,
-        })
+        _update_spawn_tool(
+            tool,
+            enabled_backends,
+            {
+                "claude_binary": claude_binary,
+                "opencode_binary": opencode_binary,
+                "opencode_models": opencode_models,
+                "opencode_server_url": opencode_server_url,
+                "opencode_agents": opencode_agents,
+            },
+        )
     else:
         tool.description = _build_spawn_description(
-            claude_binary, opencode_binary, opencode_models,
-            opencode_server_url, opencode_agents,
+            claude_binary,
+            opencode_binary,
+            opencode_models,
+            opencode_server_url,
+            opencode_agents,
         )
 
     session_id = str(uuid.uuid4())
     _lifespan_state.clear()
-    _lifespan_state.update({
-        "claude_binary": claude_binary,
-        "opencode_binary": opencode_binary,
-        "opencode_server_url": opencode_server_url,
-        "opencode_agents": opencode_agents,
-        "opencode_models": opencode_models,
-        "enabled_backends": enabled_backends,
-        "session_id": session_id,
-        "active_team": None,
-        "client_name": "unknown",
-        "client_version": "unknown",
-    })
+    _lifespan_state.update(
+        {
+            "claude_binary": claude_binary,
+            "opencode_binary": opencode_binary,
+            "opencode_server_url": opencode_server_url,
+            "opencode_agents": opencode_agents,
+            "opencode_models": opencode_models,
+            "enabled_backends": enabled_backends,
+            "session_id": session_id,
+            "active_team": None,
+            "client_name": "unknown",
+            "client_version": "unknown",
+            "lead_opencode_session_id": None,
+        }
+    )
     yield _lifespan_state
 
 
@@ -203,12 +265,25 @@ class HarnessDetectionMiddleware(Middleware):
         if not enabled:
             if _lifespan_state.get("claude_binary"):
                 enabled.append("claude")
-            if _lifespan_state.get("opencode_binary") and _lifespan_state.get("opencode_server_url"):
+            if _lifespan_state.get("opencode_binary") and _lifespan_state.get(
+                "opencode_server_url"
+            ):
                 enabled.append("opencode")
 
         _lifespan_state["enabled_backends"] = enabled
         _lifespan_state["client_name"] = client_name
         _lifespan_state["client_version"] = client_version
+
+        # Experimental: discover lead's OpenCode session for push notifications
+        if (
+            _lead_notify_enabled()
+            and client_name == "opencode"
+            and _lifespan_state.get("opencode_server_url")
+        ):
+            lead_session = _discover_lead_opencode_session(
+                _lifespan_state["opencode_server_url"]
+            )
+            _lifespan_state["lead_opencode_session_id"] = lead_session
 
         if _spawn_tool:
             _update_spawn_tool(_spawn_tool, enabled, _lifespan_state)
@@ -338,6 +413,16 @@ def _push_to_opencode_session(
         )
 
 
+def _push_to_lead(server_url: str, lead_session_id: str, text: str) -> None:
+    """Push a message into the lead's OpenCode session. Best-effort."""
+    try:
+        opencode_client.send_prompt_async(server_url, lead_session_id, text)
+    except OpenCodeAPIError:
+        logger.warning(
+            "Lead notify: failed to push to lead session %s", lead_session_id
+        )
+
+
 def _cleanup_opencode_session(server_url: str | None, session_id: str | None) -> None:
     """Abort and delete an opencode session. Best-effort, errors are logged."""
     if not server_url or not session_id:
@@ -428,6 +513,14 @@ def send_message(
         )
         if target_member and oc_url:
             _push_to_opencode_session(oc_url, target_member, content)
+
+        # Experimental: push to lead's OpenCode session
+        if recipient == "team-lead" and _lead_notify_enabled():
+            ls = _get_lifespan(ctx)
+            lead_sid = ls.get("lead_opencode_session_id")
+            if lead_sid and oc_url:
+                _push_to_lead(oc_url, lead_sid, content)
+
         return SendMessageResult(
             success=True,
             message=f"Message sent to {recipient}",
@@ -723,6 +816,13 @@ async def poll_inbox(
     )
     if msgs:
         return [m.model_dump(by_alias=True, exclude_none=True) for m in msgs]
+
+    # When lead notify is enabled and client is OpenCode, return immediately.
+    # Messages are pushed to the lead's session via send_prompt_async,
+    # so blocking here is unnecessary and harmful (single-threaded agent).
+    if _lead_notify_enabled() and _lifespan_state.get("client_name") == "opencode":
+        return []
+
     deadline = time.time() + timeout_ms / 1000.0
     while time.time() < deadline:
         await asyncio.sleep(0.5)
@@ -816,7 +916,9 @@ def peek_teammate(
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
     mcp.run()
 
 

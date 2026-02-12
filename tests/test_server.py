@@ -574,7 +574,9 @@ class TestProcessShutdownGuard:
         assert result.is_error is False
         assert killed == ["%77"]
 
-    async def test_should_kill_tmux_window_on_shutdown(self, client: Client, monkeypatch):
+    async def test_should_kill_tmux_window_on_shutdown(
+        self, client: Client, monkeypatch
+    ):
         killed = []
         monkeypatch.setattr(
             "claude_teams.server.kill_tmux_pane", lambda pane_id: killed.append(pane_id)
@@ -942,7 +944,9 @@ class TestBuildSpawnDescription:
         )
         assert "opencode agents" not in desc.lower()
 
-    def test_should_hide_opencode_when_not_in_enabled_backends(self, monkeypatch) -> None:
+    def test_should_hide_opencode_when_not_in_enabled_backends(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
         desc = _build_spawn_description(
             "/bin/claude",
@@ -978,7 +982,9 @@ class TestBuildSpawnDescription:
         assert "'claude'" in desc
         assert "'opencode'" in desc
 
-    def test_should_hide_opencode_agents_when_opencode_not_enabled(self, monkeypatch) -> None:
+    def test_should_hide_opencode_agents_when_opencode_not_enabled(
+        self, monkeypatch
+    ) -> None:
         monkeypatch.delenv("USE_TMUX_WINDOWS", raising=False)
         agents = [{"name": "build", "description": "The default agent."}]
         desc = _build_spawn_description(
@@ -1169,9 +1175,7 @@ class TestOpencodeWithoutUrl:
     async def test_should_exclude_opencode_when_url_missing(
         self, opencode_env_no_url_client: Client
     ):
-        await opencode_env_no_url_client.call_tool(
-            "team_create", {"team_name": "tnou"}
-        )
+        await opencode_env_no_url_client.call_tool("team_create", {"team_name": "tnou"})
         result = await opencode_env_no_url_client.call_tool(
             "spawn_teammate",
             {
@@ -1226,7 +1230,11 @@ class TestPeekTeammate:
             if "display-message" in cmd:
                 return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
             if "capture-pane" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "hello world\n\n", "stderr": ""})()
+                return type(
+                    "R",
+                    (),
+                    {"returncode": 0, "stdout": "hello world\n\n", "stderr": ""},
+                )()
             return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
 
         monkeypatch.setattr(
@@ -1272,7 +1280,9 @@ class TestPeekTeammate:
             if "display-message" in cmd:
                 return type("R", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
             if "capture-pane" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "output\n", "stderr": ""})()
+                return type(
+                    "R", (), {"returncode": 0, "stdout": "output\n", "stderr": ""}
+                )()
             return type("R", (), {"returncode": 1, "stdout": "", "stderr": "unknown"})()
 
         monkeypatch.setattr(
@@ -1347,3 +1357,51 @@ class TestEnabledBackendsEnvParsing:
 
     def test_should_filter_all_unknown_backends(self):
         assert _parse_backends_env("bogus,fake") == []
+
+
+class TestLeadNotifyPollInbox:
+    @pytest.fixture
+    async def lead_notify_client(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(teams, "TEAMS_DIR", tmp_path / "teams")
+        monkeypatch.setattr(teams, "TASKS_DIR", tmp_path / "tasks")
+        monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks")
+        monkeypatch.setattr(messaging, "TEAMS_DIR", tmp_path / "teams")
+        monkeypatch.setenv("CLAUDE_TEAMS_EXPERIMENTAL_LEAD_NOTIFY", "1")
+        monkeypatch.setattr(
+            "claude_teams.server.discover_harness_binary",
+            lambda name: "/usr/bin/echo" if name == "claude" else None,
+        )
+        monkeypatch.setattr(
+            "claude_teams.server.discover_opencode_models",
+            lambda binary: [],
+        )
+        (tmp_path / "teams").mkdir()
+        (tmp_path / "tasks").mkdir()
+        async with Client(mcp) as c:
+            yield c
+
+    async def test_poll_inbox_returns_immediately_when_lead_notify_enabled(
+        self, lead_notify_client: Client, monkeypatch
+    ):
+        """When CLAUDE_TEAMS_EXPERIMENTAL_LEAD_NOTIFY is set and client is opencode,
+        poll_inbox should return immediately without blocking."""
+        from claude_teams.server import _lifespan_state
+
+        _lifespan_state["client_name"] = "opencode"
+
+        await lead_notify_client.call_tool("team_create", {"team_name": "tln1"})
+
+        import time
+
+        start = time.time()
+        result = _data(
+            await lead_notify_client.call_tool(
+                "poll_inbox",
+                {"team_name": "tln1", "agent_name": "team-lead", "timeout_ms": 5000},
+            )
+        )
+        elapsed = time.time() - start
+
+        assert result == []
+        # Should return in well under 1 second, not 5 seconds
+        assert elapsed < 1.0
