@@ -4,7 +4,6 @@ import logging
 import os
 import time
 import uuid
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
 
@@ -167,8 +166,9 @@ def _update_spawn_tool(tool, enabled: list[str], state: dict[str, Any]) -> None:
 def _discover_lead_opencode_session(server_url: str) -> str | None:
     """Discover the lead agent's OpenCode session ID.
 
-    Queries active sessions on the OpenCode server, filters by current
-    working directory. Returns session ID if exactly one match, else None.
+    Checks /session/status for busy sessions. If exactly one session
+    has status type "busy", that is the lead. Called from team_create
+    when the lead is the only busy session (no teammates exist yet).
     """
     try:
         active = opencode_client.list_active_sessions(server_url)
@@ -176,32 +176,35 @@ def _discover_lead_opencode_session(server_url: str) -> str | None:
         logger.warning("Lead notify: failed to list active sessions")
         return None
 
-    if not active:
-        return None
+    busy = {
+        sid: status
+        for sid, status in active.items()
+        if isinstance(status, dict) and status.get("type") == "busy"
+    }
 
-    cwd = str(Path.cwd())
-    candidates = []
-    for session_id in active:
-        try:
-            session = opencode_client.get_session(server_url, session_id)
-        except OpenCodeAPIError:
-            continue
-        if session.get("directory") == cwd:
-            candidates.append(session_id)
+    if len(busy) == 1:
+        session_id = next(iter(busy))
+        logger.info("Lead notify: discovered lead session %s", session_id)
+        return session_id
 
-    if len(candidates) == 1:
-        logger.info("Lead notify: discovered lead session %s", candidates[0])
-        return candidates[0]
-
-    if len(candidates) > 1:
+    if len(busy) > 1:
         logger.warning(
-            "Lead notify: %d active sessions in cwd, cannot determine lead",
-            len(candidates),
+            "Lead notify: %d busy sessions, cannot determine lead",
+            len(busy),
         )
     else:
-        logger.info("Lead notify: no active sessions found in cwd")
+        logger.info("Lead notify: no busy sessions found")
 
     return None
+
+
+def _get_lead_session(ls: dict) -> str | None:
+    """Return cached lead session ID. Cache-only, no discovery.
+
+    The lead session is discovered once during team_create (when the
+    lead is the only busy session). All other code paths read the cache.
+    """
+    return ls.get("lead_opencode_session_id")
 
 
 @lifespan
@@ -319,25 +322,18 @@ class HarnessDetectionMiddleware(Middleware):
         _lifespan_state["client_name"] = client_name
         _lifespan_state["client_version"] = client_version
 
-        # Discover lead's OpenCode session for push notifications
-        if client_name == "opencode" and _lifespan_state.get("opencode_server_url"):
-            lead_session = _discover_lead_opencode_session(
-                _lifespan_state["opencode_server_url"]
-            )
-            _lifespan_state["lead_opencode_session_id"] = lead_session
-
-        # Update check_teammate description based on push availability
+        # Assume push available when opencode connects with a server URL.
+        # Actual lead session is discovered in team_create (not here).
+        push_available = bool(
+            client_name == "opencode"
+            and _lifespan_state.get("opencode_server_url")
+        )
         if _check_teammate_tool:
-            push_available = bool(
-                _lifespan_state.get("lead_opencode_session_id")
-                and _lifespan_state.get("opencode_server_url")
-            )
             _check_teammate_tool.description = _build_check_teammate_description(
                 push_available
             )
 
-        # Update read_inbox description for lead sessions
-        is_lead = bool(_lifespan_state.get("lead_opencode_session_id"))
+        is_lead = push_available
         if _read_inbox_tool:
             _read_inbox_tool.description = _build_read_inbox_description(is_lead)
 
@@ -391,6 +387,14 @@ def team_create(
         name=team_name, session_id=ls["session_id"], description=description
     )
     ls["active_team"] = team_name
+
+    # Discover lead session when the lead is an opencode client.
+    # At this point the lead is busy (mid-tool-call) and no teammates
+    # exist yet, so /session/status has exactly one entry.
+    if ls.get("client_name") == "opencode" and ls.get("opencode_server_url"):
+        lead_sid = _discover_lead_opencode_session(ls["opencode_server_url"])
+        ls["lead_opencode_session_id"] = lead_sid
+
     return result.model_dump()
 
 
@@ -573,7 +577,7 @@ def send_message(
         # Push to lead's OpenCode session
         if recipient == "team-lead":
             ls = _get_lifespan(ctx)
-            lead_sid = ls.get("lead_opencode_session_id")
+            lead_sid = _get_lead_session(ls)
             if lead_sid and oc_url:
                 _push_to_lead(oc_url, lead_sid, content)
 
@@ -948,9 +952,8 @@ async def check_teammate(
 
     # 4. Optional deferred notification
     ls = _get_lifespan(ctx)
-    push_available = bool(
-        ls.get("lead_opencode_session_id") and ls.get("opencode_server_url")
-    )
+    lead_sid = _get_lead_session(ls)
+    push_available = bool(lead_sid and ls.get("opencode_server_url"))
     notification_scheduled = False
 
     if notify_after_minutes is not None and not push_available:
@@ -959,7 +962,6 @@ async def check_teammate(
     if notify_after_minutes is not None and push_available:
         delay_s = notify_after_minutes * 60
         oc_url = ls["opencode_server_url"]
-        lead_sid = ls["lead_opencode_session_id"]
         t_team = team_name
         t_agent = agent_name
 
