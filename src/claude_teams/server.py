@@ -72,7 +72,7 @@ def _parse_backends_env(raw: str) -> list[str]:
 _SPAWN_TOOL_BASE_DESCRIPTION = (
     "Spawn a new teammate in a tmux {target}. The teammate receives its initial "
     "prompt via inbox and begins working autonomously. Names must be unique "
-    "within the team."
+    "within the team. cwd must be an absolute path to the teammate's working directory."
 )
 
 
@@ -418,11 +418,16 @@ def spawn_teammate_tool(
     ctx: Context,
     model: str = "sonnet",
     subagent_type: str = "general-purpose",
+    cwd: str = "",
     plan_mode_required: bool = False,
     backend_type: Literal["claude", "opencode"] = "claude",
 ) -> dict:
     """Spawn a new teammate in tmux. Description is dynamically updated
     at startup with available backends and models."""
+    import os.path
+
+    if not cwd or not os.path.isabs(cwd):
+        raise ToolError("cwd is required and must be an absolute path.")
     ls = _get_lifespan(ctx)
     enabled = ls.get("enabled_backends", [])
     if enabled and backend_type not in enabled:
@@ -445,6 +450,7 @@ def spawn_teammate_tool(
             opencode_binary=ls["opencode_binary"],
             opencode_server_url=ls["opencode_server_url"],
             opencode_agent=opencode_agent,
+            cwd=cwd,
         )
     except (ValueError, OpenCodeAPIError) as e:
         raise ToolError(str(e))
