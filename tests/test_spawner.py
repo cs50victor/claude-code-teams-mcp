@@ -10,6 +10,7 @@ from claude_teams.models import COLOR_PALETTE, TeammateMember
 from claude_teams.spawner import (
     assign_color,
     build_opencode_attach_command,
+    build_opencode_config_content,
     build_spawn_command,
     discover_harness_binary,
     discover_opencode_models,
@@ -230,6 +231,23 @@ class TestKillTmuxPane:
         )
 
 
+class TestBuildOpencodeConfigContent:
+    def test_should_set_agent_model(self) -> None:
+        content = build_opencode_config_content("build", "anthropic/claude-sonnet-4-5")
+        import json
+
+        parsed = json.loads(content)
+        assert parsed["agent"]["build"]["model"] == "anthropic/claude-sonnet-4-5"
+
+    def test_should_produce_valid_json(self) -> None:
+        import json
+
+        content = build_opencode_config_content("explore", "openai/gpt-5.2-codex")
+        parsed = json.loads(content)
+        assert "agent" in parsed
+        assert "explore" in parsed["agent"]
+
+
 class TestBuildOpencodeAttachCommand:
     def test_should_contain_attach_with_session_and_dir(self) -> None:
         cmd = build_opencode_attach_command(
@@ -249,6 +267,33 @@ class TestBuildOpencodeAttachCommand:
         )
         assert "run" not in cmd
         assert "--format" not in cmd
+
+    def test_should_include_config_content_env_var(self) -> None:
+        cmd = build_opencode_attach_command(
+            "/usr/local/bin/opencode",
+            "http://localhost:4096",
+            "ses_1",
+            "/tmp",
+            config_content='{"agent":{"build":{"model":"anthropic/claude-sonnet-4-5"}}}',
+        )
+        assert "OPENCODE_CONFIG_CONTENT=" in cmd
+        assert cmd.index("OPENCODE_CONFIG_CONTENT") < cmd.index("opencode")
+
+    def test_should_omit_config_content_when_none(self) -> None:
+        cmd = build_opencode_attach_command(
+            "/usr/local/bin/opencode",
+            "http://localhost:4096",
+            "ses_1",
+            "/tmp",
+            config_content=None,
+        )
+        assert "OPENCODE_CONFIG_CONTENT" not in cmd
+
+    def test_should_omit_config_content_by_default(self) -> None:
+        cmd = build_opencode_attach_command(
+            "/usr/local/bin/opencode", "http://localhost:4096", "ses_1", "/tmp"
+        )
+        assert "OPENCODE_CONFIG_CONTENT" not in cmd
 
 
 class TestSpawnTeammateBackendType:
@@ -318,6 +363,7 @@ class TestSpawnTeammateBackendType:
             backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
+            model="anthropic/claude-sonnet-4-5",
         )
         assert member.backend_type == "opencode"
         assert member.opencode_session_id == "ses_test123"
@@ -345,6 +391,7 @@ class TestSpawnTeammateBackendType:
             backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
+            model="anthropic/claude-sonnet-4-5",
         )
         mock_oc.verify_mcp_configured.assert_called_once_with("http://localhost:4096")
 
@@ -365,6 +412,7 @@ class TestSpawnTeammateBackendType:
             backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
+            model="anthropic/claude-sonnet-4-5",
         )
         mock_oc.send_prompt_async.assert_called_once()
         call_kwargs = mock_oc.send_prompt_async.call_args
@@ -388,6 +436,7 @@ class TestSpawnTeammateBackendType:
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
             opencode_agent="explore",
+            model="anthropic/claude-sonnet-4-5",
         )
         call_kwargs = mock_oc.send_prompt_async.call_args
         assert call_kwargs[1]["agent"] == "explore"
@@ -409,6 +458,7 @@ class TestSpawnTeammateBackendType:
             backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
+            model="anthropic/claude-sonnet-4-5",
         )
         call_kwargs = mock_oc.send_prompt_async.call_args
         assert call_kwargs[1]["agent"] == "build"
@@ -430,6 +480,7 @@ class TestSpawnTeammateBackendType:
             backend_type="opencode",
             opencode_binary="/usr/local/bin/opencode",
             opencode_server_url="http://localhost:4096",
+            model="anthropic/claude-sonnet-4-5",
         )
         config = teams.read_config(TEAM, base_dir=team_dir)
         found = [
@@ -462,6 +513,7 @@ class TestSpawnTeammateBackendType:
                 backend_type="opencode",
                 opencode_binary="/usr/local/bin/opencode",
                 opencode_server_url="http://localhost:4096",
+                model="anthropic/claude-sonnet-4-5",
             )
 
         mock_oc.abort_session.assert_called_once_with(
@@ -485,6 +537,70 @@ class TestSpawnTeammateBackendType:
                 base_dir=team_dir,
                 backend_type="claude",
             )
+
+    @pytest.mark.parametrize("short_name", ["sonnet", "opus", "haiku"])
+    def test_should_reject_short_model_name_for_opencode(
+        self, short_name: str, team_dir: Path
+    ) -> None:
+        with pytest.raises(ValueError, match="full model ID"):
+            spawn_teammate(
+                TEAM,
+                "worker",
+                "prompt",
+                "/bin/echo",
+                SESSION_ID,
+                base_dir=team_dir,
+                backend_type="opencode",
+                opencode_binary="/usr/local/bin/opencode",
+                opencode_server_url="http://localhost:4096",
+                model=short_name,
+            )
+
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_accept_full_model_id_for_opencode(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        mock_oc.create_session.return_value = "ses_1"
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        member = spawn_teammate(
+            TEAM,
+            "worker",
+            "prompt",
+            "/bin/echo",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
+            model="anthropic/claude-sonnet-4-5",
+        )
+        assert member.model == "anthropic/claude-sonnet-4-5"
+
+    @patch("claude_teams.spawner.opencode_client")
+    @patch("claude_teams.spawner.subprocess")
+    def test_should_include_config_content_in_opencode_attach_command(
+        self, mock_subprocess: MagicMock, mock_oc: MagicMock, team_dir: Path
+    ) -> None:
+        mock_oc.create_session.return_value = "ses_1"
+        mock_subprocess.run.return_value.stdout = "%42\n"
+        spawn_teammate(
+            TEAM,
+            "pinned",
+            "Do stuff",
+            "/bin/echo",
+            SESSION_ID,
+            base_dir=team_dir,
+            backend_type="opencode",
+            opencode_binary="/usr/local/bin/opencode",
+            opencode_server_url="http://localhost:4096",
+            model="anthropic/claude-sonnet-4-5",
+            opencode_agent="build",
+        )
+        call_args = mock_subprocess.run.call_args[0][0]
+        cmd_str = call_args[-1]
+        assert "OPENCODE_CONFIG_CONTENT=" in cmd_str
+        assert "anthropic/claude-sonnet-4-5" in cmd_str
 
     @patch("claude_teams.spawner.subprocess")
     def test_should_write_raw_prompt_to_inbox_not_wrapped(

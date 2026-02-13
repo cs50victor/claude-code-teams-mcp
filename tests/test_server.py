@@ -306,7 +306,7 @@ class TestWiring:
         )
         assert len(inbox) == 1
         assert inbox[0]["text"].startswith("hello bob")
-        assert "sent from team-lead" in inbox[0]["text"]
+        assert "sent from teammate 'team-lead'" in inbox[0]["text"]
         assert inbox[0]["from"] == "team-lead"
 
     async def test_should_round_trip_teammate_message_to_team_lead_with_sender(
@@ -335,7 +335,7 @@ class TestWiring:
         assert len(inbox) == 1
         assert inbox[0]["from"] == "worker"
         assert inbox[0]["text"].startswith("done")
-        assert "sent from worker" in inbox[0]["text"]
+        assert "sent from teammate 'worker'" in inbox[0]["text"]
 
 
 class TestTeamDeleteClearsSession:
