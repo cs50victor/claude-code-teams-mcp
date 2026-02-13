@@ -16,6 +16,8 @@ Claude Code has a built-in agent teams feature (shared task lists, inter-agent m
 
 ## Install
 
+> **Pin to a release tag** (e.g. `@v0.1.1`), not `main`. There are breaking changes between releases.
+
 Claude Code (`.mcp.json`):
 
 ```json
