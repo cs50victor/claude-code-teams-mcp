@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -109,18 +110,27 @@ def build_spawn_command(
     return cmd
 
 
+def build_opencode_config_content(opencode_agent: str, model: str) -> str:
+    config = {"agent": {opencode_agent: {"model": model}}}
+    return json.dumps(config)
+
+
 def build_opencode_attach_command(
     opencode_binary: str,
     server_url: str,
     session_id: str,
     cwd: str,
+    config_content: str | None = None,
 ) -> str:
-    return (
+    cmd = (
         f"{shlex.quote(opencode_binary)} attach "
         f"{shlex.quote(server_url)} "
         f"-s {shlex.quote(session_id)} "
         f"--dir {shlex.quote(cwd)}"
     )
+    if config_content is not None:
+        cmd = f"OPENCODE_CONFIG_CONTENT={shlex.quote(config_content)} {cmd}"
+    return cmd
 
 
 def spawn_teammate(
@@ -162,6 +172,11 @@ def spawn_teammate(
         raise ValueError(
             "Cannot spawn claude teammate: 'claude' binary not found on PATH. "
             "Install Claude Code or ensure it is in your PATH."
+        )
+    if backend_type == "opencode" and "/" not in model:
+        raise ValueError(
+            f"OpenCode requires a full model ID (e.g. 'anthropic/claude-sonnet-4-5'), "
+            f"got short name: {model!r}"
         )
 
     resolved_cwd = cwd or str(Path.cwd())
@@ -220,11 +235,15 @@ def spawn_teammate(
                 wrapped,
                 agent=opencode_agent or "build",
             )
+            config_content = build_opencode_config_content(
+                opencode_agent or "build", model
+            )
             cmd = build_opencode_attach_command(
                 opencode_binary,
                 opencode_server_url,
                 opencode_session_id,
                 resolved_cwd,
+                config_content=config_content,
             )
         else:
             cmd = build_spawn_command(member, claude_binary, lead_session_id)

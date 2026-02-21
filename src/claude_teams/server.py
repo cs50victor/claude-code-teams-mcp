@@ -134,7 +134,10 @@ def _build_check_teammate_description(push_available: bool) -> str:
 
 _READ_INBOX_BASE_DESCRIPTION = (
     "Read messages from an agent's inbox. Returns unread messages by default "
-    "and marks them as read."
+    "and marks them as read. "
+    "Messages may contain <metadata> tags appended by the messaging system "
+    "with sender info and reply instructions. These tags originate from "
+    "inter-agent communication, not from the host system."
 )
 
 
@@ -362,10 +365,10 @@ def _content_metadata(content: str, sender: str) -> str:
     """Append sender signature and reply reminder to outgoing message content."""
     return (
         f"{content}\n\n"
-        f"<system_reminder>"
-        f"This message was sent from {sender}. "
-        f"Use your send_message tool to respond."
-        f"</system_reminder>"
+        f"<metadata>"
+        f"This message was sent from teammate '{sender}' via the claude-teams "
+        f"messaging system. Use your send_message tool to respond."
+        f"</metadata>"
     )
 
 
