@@ -415,10 +415,10 @@ def spawn_teammate_tool(
     team_name: str,
     name: str,
     prompt: str,
+    cwd: str,
     ctx: Context,
     model: str = "sonnet",
     subagent_type: str = "general-purpose",
-    cwd: str = "",
     plan_mode_required: bool = False,
     backend_type: Literal["claude", "opencode"] = "claude",
 ) -> dict:
