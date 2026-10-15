@@ -56,8 +56,11 @@ class TestVerifyMcpConfigured:
                 {"claude-teams": {"status": "failed", "error": "crash"}}
             ).encode()
         )
-        with pytest.raises(OpenCodeAPIError, match="claude-teams"):
+        with pytest.raises(OpenCodeAPIError, match="claude-teams") as exc_info:
             verify_mcp_configured("http://localhost:4096")
+        message = str(exc_info.value)
+        assert "https://github.com/cs50victor/claude-code-teams-mcp#install" in message
+        assert 'git+https://github.com/cs50victor/claude-code-teams-mcp"' not in message
 
     @patch("claude_teams.opencode_client.urllib.request.urlopen")
     def test_should_raise_on_network_error(self, mock_urlopen: MagicMock) -> None:

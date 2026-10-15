@@ -72,17 +72,9 @@ _MCP_NOT_CONFIGURED_MSG = """\
 Cannot spawn opencode teammate: the 'claude-teams' MCP server is not configured \
 (or not connected) in the opencode instance at {server_url}.
 
-Add the following to your opencode MCP config (~/.config/opencode/opencode.json):
-
-{{
-  "mcp": {{
-    "claude-teams": {{
-      "type": "local",
-      "command": ["uvx", "--from", "git+https://github.com/cs50victor/claude-code-teams-mcp", "claude-teams"],
-      "enabled": true
-    }}
-  }}
-}}
+Add the 'claude-teams' MCP server to your OpenCode config using the installation
+instructions for your version:
+https://github.com/cs50victor/claude-code-teams-mcp#install
 
 Then restart the opencode server and try again."""
 
